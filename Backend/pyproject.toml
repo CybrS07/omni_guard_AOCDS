@@ -1,0 +1,30 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "TAHA", email = "Example@mail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.141.1",
+    "gitpython>=3.1.59",
+    "memprocfs>=5.18.1",
+    "numpy>=2.5.2",
+    "pandas>=3.0.5",
+    "pillow>=12.3.0",
+    "pyinstaller>=6.22.2",
+    "scapy>=2.7.0",
+    "scikit-learn>=1.9.0",
+    "volatility3>=2.28.0",
+    "xgboost>=3.4.1",
+    "yara-python>=4.5.4",
+]
+
+[project.scripts]
+backend = "backend:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
