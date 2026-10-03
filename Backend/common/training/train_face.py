@@ -1,0 +1,1 @@
+"""Prepare face embedding model."""

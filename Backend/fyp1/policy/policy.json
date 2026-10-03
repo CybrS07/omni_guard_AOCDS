@@ -1,0 +1,18 @@
+{
+  "severity_levels": [
+    "info",
+    "low",
+    "medium",
+    "high",
+    "critical"
+  ],
+  "actions": {
+    "low": "log",
+    "medium": "alert",
+    "high": "alert_and_quarantine",
+    "critical": "alert_and_quarantine"
+  },
+  "thresholds": {
+    "unknown_suspicious_score": 0.7
+  }
+}

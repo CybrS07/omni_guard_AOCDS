@@ -1,0 +1,1 @@
+"""Volume Shadow Copy snapshots."""

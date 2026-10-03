@@ -1,0 +1,10 @@
+{
+  "actions": {
+    "high": "isolate",
+    "critical": "isolate_and_restore"
+  },
+  "isolation": {
+    "allow_app_traffic": true,
+    "auto_deisolate_minutes": 0
+  }
+}

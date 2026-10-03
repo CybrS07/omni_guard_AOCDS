@@ -1,0 +1,4 @@
+{
+  "backup_interval_minutes": 60,
+  "keep_versions": 5
+}
