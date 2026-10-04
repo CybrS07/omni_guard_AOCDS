@@ -1,5 +1,0 @@
-{
-  "malware": "malware_int8.onnx",
-  "stego_image": "stego_image_int8.onnx",
-  "stego_audio": "stego_audio_int8.onnx"
-}

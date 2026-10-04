@@ -1,1 +1,0 @@
-"""Audio stego: spectrogram CNN."""

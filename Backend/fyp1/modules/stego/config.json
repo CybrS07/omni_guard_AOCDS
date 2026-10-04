@@ -1,5 +1,0 @@
-{
-  "image_threshold": 0.5,
-  "audio_threshold": 0.5,
-  "video_frame_step": 30
-}
