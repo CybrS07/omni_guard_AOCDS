@@ -1,1 +1,27 @@
-*node_modules
+# Node / frontend
+node_modules/
+Frontend/dist/
+Frontend/dist-electron/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Downloaded face model weights (re-downloaded automatically on first start)
+Backend/Python/models/*.onnx
+Backend/Python/models/*.part
+
+# PRIVATE: biometric data, password hashes, logs, intruder photos
+Backend/XML/jsons/*
+Backend/XML/XML/*
+Backend/XML/logs/*
+
+# keep the empty folders in git
+!Backend/XML/jsons/.gitkeep
+!Backend/XML/XML/.gitkeep
+!Backend/XML/logs/.gitkeep
+
+# Secrets and OS junk
+.env
+.DS_Store
