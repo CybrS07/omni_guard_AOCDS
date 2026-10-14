@@ -32,6 +32,23 @@ class LoginIn(BaseModel):
     images: list[str]
 
 
+class AddUserIn(BaseModel):
+    username: str
+    password: str
+    role: str = "user"
+    samples: list[Sample]
+
+
+class PasswordIn(BaseModel):
+    username: str
+    new_password: str
+    current_password: str = ""
+
+
+class DeleteIn(BaseModel):
+    username: str
+
+
 class DetectIn(BaseModel):
     image: str
 
@@ -61,6 +78,32 @@ def enroll(b: EnrollIn):
 @app.post("/api/login")
 def login(b: LoginIn):
     return _safe(scan.login, b.username, b.password, b.images)
+
+
+def _authed(result):
+    if result is None:
+        raise HTTPException(401, "Not authorised")
+    return result
+
+
+@app.get("/api/users")
+def users(x_token: str = Header(default="")):
+    return {"users": _authed(scan.list_users(x_token))}
+
+
+@app.post("/api/users/add")
+def users_add(b: AddUserIn, x_token: str = Header(default="")):
+    return _authed(_safe(scan.add_user, x_token, b.username, b.password, b.role, [s.model_dump() for s in b.samples]))
+
+
+@app.post("/api/users/password")
+def users_password(b: PasswordIn, x_token: str = Header(default="")):
+    return _authed(scan.change_password(x_token, b.username, b.new_password, b.current_password))
+
+
+@app.post("/api/users/delete")
+def users_delete(b: DeleteIn, x_token: str = Header(default="")):
+    return _authed(scan.delete_user(x_token, b.username))
 
 
 @app.get("/api/logs")

@@ -87,8 +87,8 @@ class FaceModel:
         if cos <= 0:
             return 0.0
         if cos < COS_MATCH:
-            return 85.0 * cos / COS_MATCH
-        return min(100.0, 85.0 + 15.0 * (cos - COS_MATCH) / (COS_FULL - COS_MATCH))
+            return 90.0 * cos / COS_MATCH
+        return min(100.0, 90.0 + 15.0 * (cos - COS_MATCH) / (COS_FULL - COS_MATCH))
 
     def score(self, embedding, known: list) -> float:
         """Match % against every stored variation; best one wins."""
