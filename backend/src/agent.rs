@@ -8,7 +8,7 @@ use rand::{distributions::Alphanumeric, Rng};
 
 use crate::config::Config;
 use crate::state::AppState;
-use crate::{api, collector, downloads, firewall, system, util, watchers};
+use crate::{api, collector, downloads, firewall, software, system, util, watchers};
 
 /// Read the API token, or create it on first start. The Vite dev server reads the same
 /// file and injects it, so it never has to be typed or stored in browser code.
@@ -52,6 +52,7 @@ pub async fn run(shutdown: impl Future<Output = ()> + Send + 'static) {
     system::spawn(st.clone());
     watchers::spawn(st.clone());
     downloads::spawn(st.clone());
+    software::spawn(st.clone());
     firewall::spawn_log_watcher(st.clone());
 
     // Reading Windows firewall rules is slow; do it off the main path, then keep it fresh.

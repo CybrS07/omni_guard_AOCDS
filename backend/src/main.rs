@@ -15,6 +15,7 @@ mod logs;
 mod ports;
 #[cfg(windows)]
 mod service;
+mod software;
 mod state;
 mod system;
 mod util;

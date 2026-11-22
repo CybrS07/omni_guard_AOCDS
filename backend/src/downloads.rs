@@ -23,7 +23,17 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-const DEFAULT_EXTS: [&str; 14] = ["exe", "msi", "msix", "appx", "dll", "scr", "bat", "cmd", "ps1", "vbs", "js", "jar", "com", "lnk"];
+/// Programs, libraries, installers, scripts (Windows PowerShell / batch / Linux shell for WSL) and archives.
+const DEFAULT_EXTS: &[&str] = &[
+    "exe", "dll", "msi", "msix", "appx", "scr", "com", "lnk", "jar",
+    "ps1", "psm1", "bat", "cmd", "vbs", "js", "sh", "bash",
+    "zip", "7z", "rar", "tar", "gz", "tgz",
+];
+
+/// "*.exe", "*exe", ".exe" and "EXE" all mean the extension `exe`.
+fn clean_ext(s: &str) -> String {
+    s.trim().trim_start_matches('*').trim_start_matches('.').to_lowercase()
+}
 const MAX_ITEMS: usize = 200;
 
 // ------------------------------------------------------------------ data kept for every download
@@ -120,7 +130,41 @@ pub fn watch_dirs(cfg: &Config) -> Vec<PathBuf> {
     } else if let Some(h) = std::env::var_os("HOME") {
         homes.push(PathBuf::from(h));
     }
-    homes.iter().flat_map(|h| [h.join("Downloads"), h.join("Desktop")]).filter(|p| p.is_dir()).collect()
+    let mut dirs: Vec<PathBuf> = homes.iter().flat_map(|h| [h.join("Downloads"), h.join("Desktop")]).filter(|p| p.is_dir()).collect();
+    if cfg.watch_wsl && cfg!(windows) {
+        dirs.extend(wsl_dirs());
+    }
+    dirs
+}
+
+/// `wsl.exe -l --running -q` prints UTF-16; after lossy conversion every second char is NUL.
+pub fn parse_wsl_list(raw: &str) -> Vec<String> {
+    raw.replace('\0', "").lines().map(|l| l.trim().trim_start_matches('\u{feff}').to_string()).filter(|l| !l.is_empty()).collect()
+}
+
+/// Downloads/Desktop folders inside RUNNING WSL distributions (reached as \\wsl.localhost\<distro>\...).
+/// Only running distros are listed, so watching never wakes a stopped one. Cached for a minute.
+fn wsl_dirs() -> Vec<PathBuf> {
+    static CACHE: Mutex<Option<(std::time::Instant, Vec<PathBuf>)>> = Mutex::new(None);
+    let mut c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((t, v)) = c.as_ref() {
+        if t.elapsed() < Duration::from_secs(60) {
+            return v.clone();
+        }
+    }
+    let mut out = Vec::new();
+    if let Some(o) = crate::util::run("wsl.exe", &["-l", "--running", "-q"], 10).filter(|o| o.ok) {
+        for distro in parse_wsl_list(&o.stdout) {
+            let root = PathBuf::from(format!(r"\\wsl.localhost\{distro}"));
+            let mut homes = vec![root.join("root")];
+            if let Ok(rd) = std::fs::read_dir(root.join("home")) {
+                homes.extend(rd.flatten().map(|e| e.path()));
+            }
+            out.extend(homes.iter().flat_map(|h| [h.join("Downloads"), h.join("Desktop")]).filter(|p| p.is_dir()));
+        }
+    }
+    *c = Some((std::time::Instant::now(), out.clone()));
+    out
 }
 
 fn wanted(path: &Path, exts: &[String]) -> bool {
@@ -153,7 +197,7 @@ pub fn spawn(st: Arc<AppState>) {
 }
 
 fn watch_loop(st: Arc<AppState>) {
-    let exts: Vec<String> = if st.cfg.download_extensions.is_empty() { DEFAULT_EXTS.iter().map(|s| s.to_string()).collect() } else { st.cfg.download_extensions.clone() };
+    let exts: Vec<String> = if st.cfg.download_extensions.is_empty() { DEFAULT_EXTS.iter().map(|s| s.to_string()).collect() } else { st.cfg.download_extensions.iter().map(|e| clean_ext(e)).filter(|e| !e.is_empty()).collect() };
     // path -> (size, modified, how many checks in a row it did not change)
     let mut pending: HashMap<PathBuf, (u64, Option<SystemTime>, u8)> = HashMap::new();
     let mut known: HashSet<PathBuf> = HashSet::new();
@@ -346,4 +390,26 @@ fn prompt_async(st: Arc<AppState>, id: String) {
             let _ = resolve(&st, &id, allow, "popup"); // fails harmlessly if the dashboard answered first
         }
     });
+}
+
+#[cfg(test)]
+mod ext_tests {
+    use super::*;
+
+    #[test]
+    fn extension_spellings() {
+        assert_eq!(clean_ext("*exe"), "exe");
+        assert_eq!(clean_ext("*.PS1"), "ps1");
+        assert_eq!(clean_ext(" .zip "), "zip");
+        assert!(wanted(Path::new("/x/setup.EXE"), &["exe".to_string()]));
+        for e in ["exe", "dll", "msi", "ps1", "bash", "sh", "zip"] {
+            assert!(DEFAULT_EXTS.contains(&e), "{e} missing");
+        }
+    }
+
+    #[test]
+    fn wsl_list_utf16_noise() {
+        let raw = "\u{feff}U\0b\0u\0n\0t\0u\0\r\0\n\0D\0e\0b\0i\0a\0n\0\r\0\n\0";
+        assert_eq!(parse_wsl_list(raw), vec!["Ubuntu", "Debian"]);
+    }
 }

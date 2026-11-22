@@ -44,3 +44,8 @@ pub fn analyze(base: &str, f: &FileInfo) -> Result<Value, String> {
         }),
     )
 }
+
+/// Vulnerability check for an installed program (NVD only): name + version -> status, CVEs, fixed version.
+pub fn software(base: &str, name: &str, version: &str, publisher: &str) -> Result<Value, String> {
+    post_json(base, "/api/intel/software", &json!({ "name": name, "version": version, "publisher": publisher }))
+}

@@ -99,4 +99,32 @@ New programs saved to Downloads/Desktop are checked automatically:
 
 Verdicts: **clean** and **vulnerable** (not malware) are saved back where you downloaded them (vulnerable also raises an alert);
 **malware**, **suspicious** and **unverified** stay isolated until you press Allow or Remove (popup or Downloads page).
-Add your free VirusTotal key on the Downloads page first. Options (`watch_dirs`, `download_extensions`, `download_monitor`, `intel_url`) go in `backend/config.json`.
+
+**File types watched** (default): exe, dll, msi, msix, appx, scr, com, lnk, jar, ps1, psm1, bat, cmd, vbs, js, sh, bash, zip, 7z, rar, tar, gz, tgz.
+`"*.exe"`, `"*exe"`, `".exe"` and `"exe"` all mean the same. Change the list with `download_extensions` in `backend/config.json`.
+**WSL:** Downloads/Desktop folders of *running* WSL distributions are watched too (`"watch_wsl": false` turns it off).
+
+**Installed software** (`backend/src/software.rs`): every program in "Apps & features" is checked against NVD in the background
+(at start, then every 30 min, or press *Scan now*). Results are on the Downloads page; a newly vulnerable program raises an alert.
+Turn off with `"software_check": false`. Without an NVD key each program takes ~15 s (NVD rate limit), so the first pass of 100 programs takes a while.
+
+**Copy / export:** every table has *Copy* (JSON to clipboard), *JSON* and *CSV* buttons; each row's details have *Copy details*, *Copy SHA-256*, *Copy as JSON*.
+
+### API keys  ->  the `.env` file
+
+1. Copy `.env.example` to `.env` (project root, next to `package.json`).
+2. Paste your keys after the `=` (no quotes needed):
+   ```
+   VT_API_KEY=your-virustotal-key
+   NVD_API_KEY=your-nvd-key
+   ```
+3. Save. The Python service re-reads `.env` on every check, so no restart is needed.
+
+`.env` is listed in `.gitignore`; `.env.example` (empty) is the only one that is committed. Priority: real environment variable > `.env` > key typed on the Downloads page.
+Packaged app: put `.env` next to the exe (or point `SOC_ENV_FILE` at it).
+Options (`watch_dirs`, `download_extensions`, `watch_wsl`, `software_check`, `download_monitor`, `intel_url`) go in `backend/config.json`.
+
+## Theme
+
+Colours exist only in `frontend/src/theme/theme.css`. Dark = Midnight Violet `#1C0221` / Brick Ember `#B80C09` / Coral Glow `#FF7F51` / Wine Plum `#702632`;
+Light = White `#FFFFFF` / Imperial Blue `#01295F` / Wine Plum / Coral Glow.

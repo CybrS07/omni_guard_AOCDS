@@ -58,6 +58,8 @@ pub fn router(st: Shared) -> Router {
         .route("/api/dns/resolve", get(dns_resolve))
         .route("/api/downloads", get(downloads_list))
         .route("/api/downloads/decision", post(downloads_decide))
+        .route("/api/software", get(software_list))
+        .route("/api/software/rescan", post(software_rescan))
         .layer(middleware::from_fn_with_state(st.clone(), guard))
         .layer(cors) // outermost so CORS preflights are answered before the guard runs
         .with_state(st)
@@ -101,6 +103,8 @@ async fn index() -> Json<Value> {
             {"method": "POST", "path": "/api/firewall/block-ip", "about": "{ip} blocks inbound+outbound"},
             {"method": "POST", "path": "/api/firewall/logging", "about": "enable dropped-packet logging"},
             {"method": "GET",  "path": "/api/downloads", "about": "files held in isolation + verdicts (VirusTotal / NVD)"},
+            {"method": "GET",  "path": "/api/software", "about": "installed programs + known vulnerabilities (NVD)"},
+            {"method": "POST", "path": "/api/software/rescan", "about": "check installed software again now"},
             {"method": "POST", "path": "/api/downloads/decision", "about": "{id, allow} keep or permanently remove a held download"},
             {"method": "GET",  "path": "/api/dns/resolve?domain=example.com", "about": "IP addresses behind a domain (for building block rules)"},
             {"method": "POST", "path": "/api/firewall/port/stop", "about": "{port,proto} block inbound traffic to a listening port (reversible)"},
@@ -435,4 +439,25 @@ async fn downloads_decide(State(st): State<Shared>, Json(b): Json<DecisionBody>)
     let s = st.clone();
     let item = blocking(move || crate::downloads::resolve(&s, &b.id, b.allow, "dashboard")).await?.map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(json!({ "item": item })))
+}
+
+// ------------------------------------------------------------------ installed software (NVD)
+
+async fn software_list(State(st): State<Shared>) -> Json<Value> {
+    let items = st.software.list();
+    let vulnerable = items.iter().filter(|s| s.status == "vulnerable").count();
+    let pending = items.iter().filter(|s| s.status == "pending").count();
+    Json(json!({
+        "enabled": st.cfg.software_check,
+        "scanning": st.software.scanning.load(std::sync::atomic::Ordering::SeqCst),
+        "last_scan": st.software.last_scan(),
+        "total": items.len(), "vulnerable": vulnerable, "pending": pending,
+        "items": items,
+    }))
+}
+
+async fn software_rescan(State(st): State<Shared>) -> Json<Value> {
+    st.software.rescan.store(true, std::sync::atomic::Ordering::SeqCst);
+    st.log("apps", "INFO", "SOFTWARE_SCAN requested from the dashboard");
+    Json(json!({ "ok": true }))
 }

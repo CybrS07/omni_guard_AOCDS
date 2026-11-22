@@ -11,3 +11,9 @@ backend/scan/dist/
 backend/scan/*.spec
 desktop/node_modules/
 dist-desktop/
+
+# secrets
+.env
+.env.*
+.env.example
+backend/scan/api_keys.py

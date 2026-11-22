@@ -64,7 +64,7 @@ async function boot() {
   session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => cb(perm === 'media' && wc.getURL().startsWith(origin)))
 
   const win = new BrowserWindow({
-    width: 1360, height: 860, minWidth: 980, minHeight: 640, title: 'SOC Monitor', backgroundColor: '#000022', autoHideMenuBar: true,
+    width: 1360, height: 860, minWidth: 980, minHeight: 640, title: 'SOC Monitor', backgroundColor: '#1c0221', autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   })
   win.webContents.setWindowOpenHandler(({ url }) => (/^https:/.test(url) && shell.openExternal(url), { action: 'deny' }))

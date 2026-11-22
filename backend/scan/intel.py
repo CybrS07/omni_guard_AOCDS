@@ -13,12 +13,15 @@ The Rust side then acts on the verdict:
   unverified              -> file stays isolated until the user chooses Allow or Remove
 Only the hash and text details are sent out, never the file itself.
 
-API keys: set them on the Downloads page (stored in intel.json) or with the environment variables
-VT_API_KEY / NVD_API_KEY. VirusTotal needs a (free) key; NVD works without one but is slower.
+API keys: put them in the `.env` file in the project root (copy `.env.example` to `.env`):
+    VT_API_KEY=...      NVD_API_KEY=...
+They can also be typed on the Downloads page (stored in intel.json). Nothing is hard-coded.
+VirusTotal needs a (free) key; NVD works without one but is slower.
 """
 import json
 import os
 import re
+import sys
 import threading
 import time
 import urllib.error
@@ -64,10 +67,43 @@ def _write_json(path: Path, data, private: bool = False):
     os.replace(tmp, path)
 
 
+def _env_files() -> list[Path]:
+    """Where a .env may live: SOC_ENV_FILE, the project root, next to the packaged exe, the working dir."""
+    c = []
+    if os.environ.get("SOC_ENV_FILE"):
+        c.append(Path(os.environ["SOC_ENV_FILE"]))
+    c.append(Path(__file__).resolve().parents[2] / ".env")
+    if getattr(sys, "frozen", False):
+        c.append(Path(sys.executable).resolve().parent / ".env")
+    c.append(Path.cwd() / ".env")
+    return c
+
+
+def _dotenv() -> dict:
+    """Tiny .env reader (KEY=value, # comments, optional quotes). Re-read on every call so edits apply without a restart."""
+    out: dict = {}
+    for f in _env_files():
+        try:
+            lines = f.read_text(encoding="utf-8-sig").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            v = v.strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                v = v[1:-1]
+            out.setdefault(k.strip().removeprefix("export ").strip(), v.strip())
+    return out
+
+
 def keys() -> dict:
-    cfg = _read_json(CFG_FILE, {})
-    return {"vt": os.environ.get("VT_API_KEY") or cfg.get("vt_api_key", ""),
-            "nvd": os.environ.get("NVD_API_KEY") or cfg.get("nvd_api_key", "")}
+    """Order: real environment variable > .env file > key typed on the Downloads page."""
+    env, cfg = _dotenv(), _read_json(CFG_FILE, {})
+    pick = lambda name, saved: (os.environ.get(name) or env.get(name) or cfg.get(saved, "")).strip()
+    return {"vt": pick("VT_API_KEY", "vt_api_key"), "nvd": pick("NVD_API_KEY", "nvd_api_key")}
 
 
 def _cache_get(key: str):
@@ -178,8 +214,10 @@ def _score(cve: dict):
 
 def nvd_cves(vendor: str, prod: str, version: str, key: str) -> list:
     """CVEs that NVD says affect exactly this version, with patch / fixed-in information."""
-    match = urllib.parse.quote(f"cpe:2.3:a:{vendor}:{prod}:{version}", safe=":")
-    status, data = _nvd_get(f"{NVD_CVES}?virtualMatchString={match}&isVulnerable&resultsPerPage=100", key)
+    # `cpeName` is the documented NVD parameter for "CVEs that apply to this CPE name"; isVulnerable keeps
+    # only records where this product is the vulnerable part (not just listed next to it).
+    cpe_name = urllib.parse.quote(f"cpe:2.3:a:{vendor}:{prod}:{version}", safe=":")
+    status, data = _nvd_get(f"{NVD_CVES}?cpeName={cpe_name}&isVulnerable&resultsPerPage=100", key)
     if status != 200 or not data:
         return []
     cur, found = _vtuple(version), []
@@ -199,6 +237,19 @@ def nvd_cves(vendor: str, prod: str, version: str, key: str) -> list:
         found.append({"id": c.get("id", ""), "score": score, "severity": sev, "summary": desc[:300],
                       "patch_available": bool(fixed) or patch_ref, "fixed_in": min(fixed, key=_vtuple) if fixed else ""})
     return sorted(found, key=lambda x: -x["score"])
+
+
+def vuln_lookup(product: str, company: str, version: str, key: str) -> tuple[list, str]:
+    """Product + version -> (CVEs, note). `note` explains why nothing was checked (empty when it ran)."""
+    if not (product and version and _vtuple(version)):
+        return [], "Product name or version could not be read, so vulnerabilities were not checked."
+    try:
+        cpe = find_cpe(product, company, key)
+        if not cpe:
+            return [], f"'{product}' was not found in the NVD product list."
+        return nvd_cves(cpe[0], cpe[1], version, key), ""
+    except Exception:  # NVD answered something unexpected: report it, do not fail the whole check
+        return [], "The NVD vulnerability lookup failed, so vulnerabilities were not checked."
 
 
 # ---------------------------------------------------------------- 3. verdict
@@ -244,23 +295,15 @@ def analyze(f: FileIn):
     notes = []
     vt = vt_lookup(sha, k["vt"])
     if not vt["configured"]:
-        notes.append("VirusTotal key not set: malware check skipped (add it on the Downloads page).")
+        notes.append("VirusTotal key not set: malware check skipped (add VT_API_KEY to the .env file).")
     if vt["error"]:
         notes.append(vt["error"])
 
     cves = []
     if vt["malicious"] < MALWARE_AT:  # no point asking about patches for a confirmed trojan
-        if f.product and f.version and _vtuple(f.version):
-            try:
-                cpe = find_cpe(f.product, f.company, k["nvd"])
-                if cpe:
-                    cves = nvd_cves(cpe[0], cpe[1], f.version, k["nvd"])
-                else:
-                    notes.append(f"'{f.product}' was not found in the NVD product list.")
-            except Exception:  # NVD answered something unexpected: report it, do not fail the whole check
-                notes.append("The NVD vulnerability lookup failed, so vulnerabilities were not checked.")
-        else:
-            notes.append("Product name or version could not be read from the file, so vulnerabilities were not checked.")
+        cves, note = vuln_lookup(f.product, f.company, f.version, k["nvd"])
+        if note:
+            notes.append(note)
 
     verdict, summary = decide(f.signed, vt, cves)
     result = {
@@ -271,6 +314,40 @@ def analyze(f: FileIn):
         "notes": notes, "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "cached": False,
     }
     if not vt["error"]:
+        _cache_put(ck, result)
+    return result
+
+
+# ---------------------------------------------------------------- installed software (NVD only)
+class SoftwareIn(BaseModel):
+    name: str = Field(max_length=160)
+    version: str = Field(default="", max_length=60)
+    publisher: str = Field(default="", max_length=160)
+
+
+@router.post("/software")
+def software(sw: SoftwareIn):
+    """Vulnerability check for an installed program (name + version -> NVD). No file hash, so no VirusTotal."""
+    ck = f"sw:{_norm(sw.name)}:{sw.version}"
+    cached = _cache_get(ck)
+    if cached:
+        return {**cached, "cached": True}
+    k = keys()
+    cves, note = vuln_lookup(sw.name, sw.publisher, sw.version, k["nvd"])
+    if cves:
+        status = "vulnerable"
+    elif note:
+        status = "unknown"
+    else:
+        status = "ok"
+    result = {
+        "status": status, "cves": cves[:10], "cve_count": len(cves),
+        "max_score": cves[0]["score"] if cves else 0,
+        "patch_available": any(c["patch_available"] for c in cves),
+        "fixed_in": next((c["fixed_in"] for c in cves if c["fixed_in"]), ""),
+        "notes": [note] if note else [], "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "cached": False,
+    }
+    if status != "unknown" or "failed" not in note:
         _cache_put(ck, result)
     return result
 

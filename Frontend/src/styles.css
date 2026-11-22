@@ -25,7 +25,7 @@ button, input, select { font: inherit; color: inherit; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-:focus-visible { outline: 2px solid var(--pacific); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .mono { font-family: var(--mono); }
 .muted { color: var(--muted); }
@@ -43,8 +43,8 @@ button, input, select { font: inherit; color: inherit; }
 .brand-mark {
   color: var(--on-accent);
   width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center;
-  background: linear-gradient(145deg, var(--baltic), var(--pacific));
-  box-shadow: 0 0 22px color-mix(in srgb, var(--pacific) 45%, transparent);
+  background: linear-gradient(145deg, var(--tint), var(--accent));
+  box-shadow: 0 0 22px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .brand b { display: block; letter-spacing: .04em; font-size: 15px; }
 .brand span { font-size: 11px; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
@@ -57,10 +57,10 @@ button, input, select { font: inherit; color: inherit; }
   border: 1px solid transparent;
   transition: background .15s, color .15s, border-color .15s;
 }
-.nav a:hover { color: var(--text); background: color-mix(in srgb, var(--baltic) 22%, transparent); }
+.nav a:hover { color: var(--text); background: color-mix(in srgb, var(--tint) 22%, transparent); }
 .nav a.active {
   color: var(--text);
-  background: linear-gradient(90deg, color-mix(in srgb, var(--pacific) 24%, transparent), transparent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 24%, transparent), transparent);
   border-color: var(--line);
   box-shadow: inset 3px 0 0 var(--accent);
 }
@@ -132,15 +132,15 @@ th {
 }
 td { padding: 9px 10px; border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent); vertical-align: middle; }
 tr:last-child td { border-bottom: 0; }
-tbody tr:hover td { background: color-mix(in srgb, var(--baltic) 14%, transparent); }
+tbody tr:hover td { background: color-mix(in srgb, var(--tint) 14%, transparent); }
 td.nw { white-space: nowrap; }
 td.num, th.num { text-align: right; font-family: var(--mono); }
 tr.flagged td { background: color-mix(in srgb, var(--danger) 8%, transparent); }
 .empty { padding: 26px; text-align: center; color: var(--muted); }
 .scroll-y { max-height: 360px; overflow: auto; }
 
-.bar { height: 6px; border-radius: 6px; background: color-mix(in srgb, var(--baltic) 30%, transparent); overflow: hidden; min-width: 70px; }
-.bar > i { display: block; height: 100%; background: var(--pacific); border-radius: 6px; transition: width .4s; }
+.bar { height: 6px; border-radius: 6px; background: color-mix(in srgb, var(--tint) 30%, transparent); overflow: hidden; min-width: 70px; }
+.bar > i { display: block; height: 100%; background: var(--accent); border-radius: 6px; transition: width .4s; }
 .bar.high > i { background: var(--warn); }
 .bar.critical > i { background: var(--danger); }
 
@@ -153,12 +153,12 @@ tr.flagged td { background: color-mix(in srgb, var(--danger) 8%, transparent); }
   transition: border-color .15s, box-shadow .15s;
 }
 .input::placeholder { color: color-mix(in srgb, var(--muted) 60%, transparent); }
-.input:focus { outline: none; border-color: var(--pacific); box-shadow: 0 0 0 3px color-mix(in srgb, var(--pacific) 22%, transparent); }
+.input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .form-grid .full { grid-column: 1 / -1; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .seg button { background: transparent; border: 0; padding: 7px 14px; cursor: pointer; color: var(--muted); font-weight: 600; }
-.seg button.on { background: color-mix(in srgb, var(--pacific) 26%, transparent); color: var(--text); }
+.seg button.on { background: color-mix(in srgb, var(--accent) 26%, transparent); color: var(--text); }
 .seg button.on.block { background: color-mix(in srgb, var(--danger) 26%, transparent); }
 .form-error { color: var(--danger); font-size: 13px; margin-top: 4px; }
 .hint { color: var(--muted); font-size: 12px; }
@@ -167,7 +167,7 @@ tr.flagged td { background: color-mix(in srgb, var(--danger) 8%, transparent); }
 
 .switch { position: relative; width: 38px; height: 22px; display: inline-block; }
 .switch input { opacity: 0; width: 0; height: 0; }
-.switch span { position: absolute; inset: 0; border-radius: 99px; background: color-mix(in srgb, var(--baltic) 35%, transparent); border: 1px solid var(--line); cursor: pointer; transition: .2s; }
+.switch span { position: absolute; inset: 0; border-radius: 99px; background: color-mix(in srgb, var(--tint) 35%, transparent); border: 1px solid var(--line); cursor: pointer; transition: .2s; }
 .switch span::after { content: ''; position: absolute; left: 3px; top: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--knob); transition: .2s; }
 .switch input:checked + span { background: var(--accent); border-color: var(--accent); }
 .switch input:checked + span::after { transform: translateX(16px); background: var(--knob-on); }
@@ -189,7 +189,7 @@ tr.flagged td { background: color-mix(in srgb, var(--danger) 8%, transparent); }
   border: 1px solid color-mix(in srgb, var(--warn) 50%, transparent);
   background: color-mix(in srgb, var(--warn) 9%, transparent);
 }
-.banner.info { border-color: var(--line-strong); background: color-mix(in srgb, var(--baltic) 18%, transparent); }
+.banner.info { border-color: var(--line-strong); background: color-mix(in srgb, var(--tint) 18%, transparent); }
 
 /* ===== Charts ===== */
 .chart { position: relative; }
@@ -206,7 +206,7 @@ tr.flagged td { background: color-mix(in srgb, var(--danger) 8%, transparent); }
 /* ===== Tabs / modal / toast ===== */
 .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
 .tab { padding: 7px 14px; border-radius: 99px; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; font-weight: 600; }
-.tab.on { color: var(--text); background: color-mix(in srgb, var(--pacific) 24%, transparent); border-color: var(--accent); }
+.tab.on { color: var(--text); background: color-mix(in srgb, var(--accent) 24%, transparent); border-color: var(--accent); }
 .modal-bg { position: fixed; inset: 0; background: var(--scrim); backdrop-filter: blur(4px); display: grid; place-items: center; z-index: 50; padding: 20px; }
 .modal { width: min(460px, 100%); background: var(--pop-bg); border: 1px solid var(--line-strong); border-radius: 16px; padding: 22px; box-shadow: var(--shadow); }
 .modal h3 { margin: 0 0 8px; }
@@ -215,7 +215,7 @@ tr.flagged td { background: color-mix(in srgb, var(--danger) 8%, transparent); }
 .toasts { position: fixed; right: 20px; bottom: 20px; display: grid; gap: 8px; z-index: 60; }
 .toast { padding: 11px 16px; border-radius: 11px; background: var(--pop-bg); border: 1px solid var(--line-strong); box-shadow: var(--shadow-sm); animation: slide .25s ease-out; max-width: 380px; }
 .toast.err { border-color: var(--danger); }
-.toast.ok { border-color: var(--pacific); }
+.toast.ok { border-color: var(--accent); }
 @keyframes slide { from { transform: translateY(10px); opacity: 0; } }
 
 .log-msg { font-family: var(--mono); font-size: 12.5px; word-break: break-word; }
@@ -239,4 +239,4 @@ tr.flagged td { background: color-mix(in srgb, var(--danger) 8%, transparent); }
   color: var(--muted); background: transparent; border: 1px solid var(--line);
   transition: color .15s, background .15s;
 }
-.theme-toggle:hover { color: var(--text); background: color-mix(in srgb, var(--baltic) 18%, transparent); }
+.theme-toggle:hover { color: var(--text); background: color-mix(in srgb, var(--tint) 18%, transparent); }

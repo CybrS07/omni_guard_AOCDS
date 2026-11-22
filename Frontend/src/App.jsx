@@ -46,7 +46,7 @@ export default function App() {
         <aside className="sidebar">
           <div className="brand">
             <div className="brand-mark"><Icon name="shield" size={22} /></div>
-            <div><b>SOC Monitor</b><span>Windows endpoint</span></div>
+            <div><b>Omni Guard AOCDS</b><span>Windows endpoint</span></div>
           </div>
           <nav className="nav">
             {NAV.map((n) => (

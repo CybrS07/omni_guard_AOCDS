@@ -28,8 +28,13 @@ pub struct Config {
     pub download_monitor: bool,
     /// Folders watched for new downloads. Empty = Downloads + Desktop of every user.
     pub watch_dirs: Vec<String>,
-    /// File types that get isolated and checked. Empty = exe, msi, msix, appx, dll, scr, bat, cmd, ps1, vbs, js, jar, com, lnk.
+    /// File types that get isolated and checked. Empty = exe, dll, msi, msix, appx, scr, bat, cmd, ps1, psm1,
+    /// vbs, js, jar, com, lnk, sh, bash, zip, 7z, rar, tar, gz, tgz. ("*.exe", ".exe" and "exe" all mean the same.)
     pub download_extensions: Vec<String>,
+    /// Also watch the Downloads/Desktop/home folders of running WSL (Linux) distributions.
+    pub watch_wsl: bool,
+    /// Check every installed program against NVD in the background.
+    pub software_check: bool,
     /// Where the Python analysis service (VirusTotal + NVD) listens.
     pub intel_url: String,
     /// Browser origins allowed to call the API directly (the Vite proxy needs none).
@@ -69,6 +74,8 @@ impl Default for Config {
             download_monitor: true,
             watch_dirs: vec![],
             download_extensions: vec![],
+            watch_wsl: true,
+            software_check: true,
             intel_url: "http://127.0.0.1:8000".into(),
             allowed_origins: vec![
                 "http://localhost:5173".into(),

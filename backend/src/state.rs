@@ -8,6 +8,7 @@ use crate::config::Config;
 use crate::downloads::Store as DownloadStore;
 use crate::firewall::Firewall;
 use crate::logs::Logger;
+use crate::software::Store as SoftwareStore;
 use crate::system::SystemInfo;
 use crate::util::now_iso;
 
@@ -171,6 +172,7 @@ pub struct AppState {
     pub logger: Logger,
     pub firewall: Firewall,
     pub downloads: DownloadStore,
+    pub software: SoftwareStore,
     cooldowns: Mutex<HashMap<String, Instant>>,
     next_alert_id: Mutex<u64>,
 }
@@ -182,6 +184,7 @@ impl AppState {
             logger: Logger::new(dir),
             firewall: Firewall::new(demo),
             downloads: DownloadStore::new(PathBuf::from(&cfg.data_dir).join("isolation")),
+            software: SoftwareStore::new(PathBuf::from(&cfg.data_dir)),
             cfg,
             demo,
             is_admin,
