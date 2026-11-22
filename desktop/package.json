@@ -1,0 +1,31 @@
+{
+  "name": "soc-monitor-desktop",
+  "version": "0.2.0",
+  "private": true,
+  "description": "SOC Monitor desktop app",
+  "author": "SOC Monitor",
+  "main": "main.cjs",
+  "scripts": {
+    "dev": "electron . --dev",
+    "start": "electron .",
+    "dist": "electron-builder --win --x64"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.socmonitor.app",
+    "productName": "SOC Monitor",
+    "directories": { "output": "../dist-desktop" },
+    "files": ["main.cjs", "server.cjs"],
+    "extraResources": [
+      { "from": "../frontend/dist", "to": "ui" },
+      { "from": "../backend/target/release/soc-agent.exe", "to": "agent/soc-agent.exe" },
+      { "from": "../backend/config.json", "to": "agent/config.json" },
+      { "from": "../backend/scan/dist/soc-scan", "to": "scan/soc-scan" }
+    ],
+    "win": { "target": ["nsis"], "requestedExecutionLevel": "requireAdministrator" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "perMachine": true }
+  }
+}

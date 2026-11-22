@@ -1,0 +1,130 @@
+use std::io::Read;
+use std::net::IpAddr;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
+pub struct Out {
+    pub ok: bool,
+    pub stdout: String,
+}
+
+/// Run a program WITHOUT a shell (arguments are never re-parsed), with a hard timeout.
+/// `envs` is how user-supplied values reach PowerShell: as environment variables,
+/// never spliced into script text, so they cannot inject commands.
+pub fn run_env(prog: &str, args: &[&str], envs: &[(&str, &str)], secs: u64) -> Option<Out> {
+    let mut c = Command::new(prog);
+    c.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    for (k, v) in envs {
+        c.env(k, v);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let mut child = c.spawn().ok()?;
+    let mut out = child.stdout.take()?;
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = out.read_to_end(&mut buf);
+        let _ = tx.send(buf);
+    });
+    match rx.recv_timeout(Duration::from_secs(secs)) {
+        Ok(buf) => {
+            let status = child.wait().ok()?;
+            Some(Out {
+                ok: status.success(),
+                stdout: String::from_utf8_lossy(&buf).into_owned(),
+            })
+        }
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            None
+        }
+    }
+}
+
+pub fn run(prog: &str, args: &[&str], secs: u64) -> Option<Out> {
+    run_env(prog, args, &[], secs)
+}
+
+pub fn powershell(script: &str, envs: &[(&str, &str)], secs: u64) -> Option<Out> {
+    let full = format!(
+        "$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8;{script}"
+    );
+    run_env(
+        "powershell.exe",
+        &["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &full],
+        envs,
+        secs,
+    )
+}
+
+pub fn now_iso() -> String {
+    chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string()
+}
+
+/// "1.2.3.4:443", "[fe80::1%12]:135" -> ("1.2.3.4", 443). "*:*" -> None.
+pub fn parse_addr(s: &str) -> Option<(String, u16)> {
+    let (host, port) = s.rsplit_once(':')?;
+    let port: u16 = port.parse().ok()?;
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let host = host.split('%').next()?;
+    Some((host.to_string(), port))
+}
+
+/// Loopback, private, link-local, unspecified (or unparsable) addresses.
+pub fn is_local_ip(s: &str) -> bool {
+    match s.parse::<IpAddr>() {
+        Ok(IpAddr::V4(v)) => {
+            v.is_private() || v.is_loopback() || v.is_link_local() || v.is_unspecified()
+        }
+        Ok(IpAddr::V6(v)) => {
+            let seg = v.segments()[0];
+            v.is_loopback() || v.is_unspecified() || (seg & 0xfe00) == 0xfc00 || (seg & 0xffc0) == 0xfe80
+        }
+        Err(_) => true,
+    }
+}
+
+pub fn detect_admin() -> bool {
+    if cfg!(windows) {
+        run("net", &["session"], 5).map(|o| o.ok).unwrap_or(false)
+    } else {
+        run("id", &["-u"], 2)
+            .map(|o| o.stdout.trim() == "0")
+            .unwrap_or(false)
+    }
+}
+
+pub fn ct_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+pub fn port_hint(port: u16) -> &'static str {
+    match port {
+        21 => "FTP",
+        23 => "Telnet",
+        135 => "RPC",
+        139 | 445 => "SMB",
+        1433 => "MSSQL",
+        3306 => "MySQL",
+        3389 => "RDP",
+        4444 => "common backdoor/Metasploit port",
+        5900 => "VNC",
+        5985 | 5986 => "WinRM",
+        6667 => "IRC",
+        31337 => "classic backdoor port",
+        _ => "flagged port",
+    }
+}

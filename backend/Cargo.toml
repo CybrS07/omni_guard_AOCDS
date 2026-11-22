@@ -1,0 +1,24 @@
+[package]
+name = "soc-agent"
+version = "0.2.0"
+edition = "2021"
+description = "Windows SOC monitoring agent: metrics, firewall, logs, JSON API"
+
+[dependencies]
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sysinfo = "0.30"
+tower-http = { version = "0.5", features = ["cors"] }
+chrono = "0.4"
+rand = "0.8"
+local-ip-address = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.7"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

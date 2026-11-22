@@ -1,0 +1,11 @@
+{
+  "port": 7878,
+  "cpu_high": 85,
+  "mem_high": 85,
+  "gpu_high": 90,
+  "temp_high": 80,
+  "app_cpu_high": 40,
+  "net_high_mbps": 100,
+  "scan_port_threshold": 15,
+  "suspicious_ports": [21, 23, 135, 139, 445, 1433, 3306, 3389, 4444, 5900, 5985, 5986, 6667, 31337]
+}

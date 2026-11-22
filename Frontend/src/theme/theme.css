@@ -1,0 +1,80 @@
+/* =====================================================================================
+   THEME  -  the ONLY place colours are defined.
+   Components and pages use the variables below (var(--accent), var(--panel), ...), never
+   raw hex values. To restyle the app edit this file; to switch mode see ThemeProvider.jsx
+   (it sets <html data-theme="dark|light">).
+   ===================================================================================== */
+
+/* ===== Palette (from the supplied swatches) =====
+   Palette: Prussian #000022 / Deep Navy #001242 / Baltic #005E7C / Pacific #0FA3B1 / Icy #B5E2FA / Porcelain #F9F7F3 */
+:root {
+  --prussian: #000022;
+  --navy: #001242;
+  --baltic: #005e7c;
+  --pacific: #0fa3b1;
+  --icy: #b5e2fa;
+  --porcelain: #f9f7f3;
+  color-scheme: dark;
+
+  /* ---- DARK (default) ---- */
+  --bg: var(--prussian);
+  --glow-1: color-mix(in srgb, var(--baltic) 38%, transparent);
+  --glow-2: color-mix(in srgb, var(--pacific) 14%, transparent);
+  --panel: color-mix(in srgb, var(--navy) 88%, var(--prussian));
+  --panel-2: color-mix(in srgb, var(--navy) 70%, var(--prussian));
+  --sidebar-bg: linear-gradient(180deg, color-mix(in srgb, var(--navy) 92%, var(--prussian)), var(--prussian));
+  --pop-bg: var(--navy);
+  --input-bg: color-mix(in srgb, var(--prussian) 70%, var(--navy));
+  --inset: color-mix(in srgb, var(--prussian) 45%, transparent);
+  --line: color-mix(in srgb, var(--baltic) 45%, transparent);
+  --line-strong: color-mix(in srgb, var(--baltic) 80%, transparent);
+  --text: var(--porcelain);
+  --muted: color-mix(in srgb, var(--icy) 62%, var(--navy));
+  --accent: var(--pacific);
+  --ok: var(--pacific);
+  --idle: var(--icy);
+  --series-2: var(--icy);
+  --warn: #f2b84b;
+  --danger: #ff6b81;
+  --knob: var(--icy);
+  --knob-on: #ffffff;           /* switch knob when ON */
+  --sheen: rgba(255, 255, 255, .55);  /* light sweep on primary buttons */
+  --danger-soft: #ffa3b0;
+  --on-accent: var(--prussian); /* text/icons drawn on top of accent-coloured fills */
+  --scrim: rgba(0, 0, 18, .72); /* dim layer behind modals */
+  --shadow: 0 30px 80px rgba(0, 0, 0, .55);
+  --shadow-sm: 0 10px 30px rgba(0, 0, 0, .4);
+}
+
+/* ---- LIGHT: Porcelain surface, Navy text, Baltic/Pacific accents ---- */
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: var(--porcelain);
+  --glow-1: color-mix(in srgb, var(--icy) 70%, transparent);
+  --glow-2: color-mix(in srgb, var(--pacific) 12%, transparent);
+  --panel: #ffffff;
+  --panel-2: color-mix(in srgb, #ffffff 55%, var(--porcelain));
+  --sidebar-bg: linear-gradient(180deg, #ffffff, color-mix(in srgb, var(--icy) 22%, var(--porcelain)));
+  --pop-bg: #ffffff;
+  --input-bg: var(--porcelain);
+  --inset: color-mix(in srgb, var(--icy) 18%, #ffffff);
+  --line: color-mix(in srgb, var(--baltic) 22%, transparent);
+  --line-strong: color-mix(in srgb, var(--baltic) 50%, transparent);
+  --text: var(--navy);
+  --muted: color-mix(in srgb, var(--baltic) 82%, var(--navy));
+  --accent: var(--baltic);
+  --ok: var(--baltic);
+  --idle: color-mix(in srgb, var(--baltic) 70%, #7a8a99);
+  --series-2: var(--navy);
+  --warn: #a86400;
+  --danger: #c4243f;
+  --knob: #ffffff;
+  --knob-on: #ffffff;
+  --sheen: rgba(255, 255, 255, .55);
+  --danger-soft: #ffa3b0;
+  --on-accent: var(--prussian);
+  --scrim: rgba(0, 18, 66, .55);
+  --shadow: 0 24px 60px rgba(0, 18, 66, .22);
+  --shadow-sm: 0 10px 30px rgba(0, 18, 66, .2);
+}
+
