@@ -55,6 +55,9 @@ pub fn router(st: Shared) -> Router {
         .route("/api/firewall/port/stop", post(fw_port_stop))
         .route("/api/firewall/port/start", post(fw_port_start))
         .route("/api/events", get(events))
+        .route("/api/dns/resolve", get(dns_resolve))
+        .route("/api/downloads", get(downloads_list))
+        .route("/api/downloads/decision", post(downloads_decide))
         .layer(middleware::from_fn_with_state(st.clone(), guard))
         .layer(cors) // outermost so CORS preflights are answered before the guard runs
         .with_state(st)
@@ -97,6 +100,9 @@ async fn index() -> Json<Value> {
             {"method": "POST", "path": "/api/firewall/rules/delete", "about": "{name} (only SOC- rules)"},
             {"method": "POST", "path": "/api/firewall/block-ip", "about": "{ip} blocks inbound+outbound"},
             {"method": "POST", "path": "/api/firewall/logging", "about": "enable dropped-packet logging"},
+            {"method": "GET",  "path": "/api/downloads", "about": "files held in isolation + verdicts (VirusTotal / NVD)"},
+            {"method": "POST", "path": "/api/downloads/decision", "about": "{id, allow} keep or permanently remove a held download"},
+            {"method": "GET",  "path": "/api/dns/resolve?domain=example.com", "about": "IP addresses behind a domain (for building block rules)"},
             {"method": "POST", "path": "/api/firewall/port/stop", "about": "{port,proto} block inbound traffic to a listening port (reversible)"},
             {"method": "POST", "path": "/api/firewall/port/start", "about": "{port,proto} remove that block again"},
             {"method": "POST", "path": "/api/firewall/refresh", "about": "re-read rules from Windows"},
@@ -388,4 +394,45 @@ async fn events(State(st): State<Shared>, Query(p): Query<EventsQ>) -> ApiResult
         .await?
         .map_err(|e| fail(StatusCode::BAD_GATEWAY, e))?;
     Ok(Json(json!({ "log": log, "demo": demo, "admin": admin, "count": list.len(), "events": list })))
+}
+
+// ------------------------------------------------------------------ domain -> IP
+
+#[derive(Deserialize)]
+struct DnsQ {
+    domain: String,
+}
+
+async fn dns_resolve(State(st): State<Shared>, Query(p): Query<DnsQ>) -> ApiResult {
+    let domain = crate::dns::clean_domain(&p.domain).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    let d = domain.clone();
+    let found = blocking(move || crate::dns::resolve(&d)).await?;
+    match found {
+        Ok(ips) => {
+            let ips: Vec<String> = ips.iter().map(|i| i.to_string()).collect();
+            Ok(Json(json!({ "domain": domain, "ips": ips, "count": ips.len(), "sample": false })))
+        }
+        // demo machines may have no internet: show documentation-range sample addresses
+        Err(_) if st.demo => Ok(Json(json!({ "domain": domain, "ips": ["203.0.113.10", "203.0.113.11", "2001:db8::10"], "count": 3, "sample": true }))),
+        Err(e) => Err(fail(StatusCode::BAD_GATEWAY, e)),
+    }
+}
+
+// ------------------------------------------------------------------ downloads (isolation + verdicts)
+
+async fn downloads_list(State(st): State<Shared>) -> ApiResult {
+    let watching: Vec<String> = crate::downloads::watch_dirs(&st.cfg).iter().map(|p| p.display().to_string()).collect();
+    Ok(Json(json!({ "enabled": st.cfg.download_monitor, "watching": watching, "items": st.downloads.list() })))
+}
+
+#[derive(Deserialize)]
+struct DecisionBody {
+    id: String,
+    allow: bool,
+}
+
+async fn downloads_decide(State(st): State<Shared>, Json(b): Json<DecisionBody>) -> ApiResult {
+    let s = st.clone();
+    let item = blocking(move || crate::downloads::resolve(&s, &b.id, b.allow, "dashboard")).await?.map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(json!({ "item": item })))
 }

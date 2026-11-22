@@ -24,6 +24,14 @@ pub struct Config {
     pub suspicious_ports: Vec<u16>,
     /// Distinct ports probed by one source within 60 s that counts as a port scan.
     pub scan_port_threshold: usize,
+    /// Download monitor on/off.
+    pub download_monitor: bool,
+    /// Folders watched for new downloads. Empty = Downloads + Desktop of every user.
+    pub watch_dirs: Vec<String>,
+    /// File types that get isolated and checked. Empty = exe, msi, msix, appx, dll, scr, bat, cmd, ps1, vbs, js, jar, com, lnk.
+    pub download_extensions: Vec<String>,
+    /// Where the Python analysis service (VirusTotal + NVD) listens.
+    pub intel_url: String,
     /// Browser origins allowed to call the API directly (the Vite proxy needs none).
     pub allowed_origins: Vec<String>,
 }
@@ -58,6 +66,10 @@ impl Default for Config {
                 21, 23, 135, 139, 445, 1433, 3306, 3389, 4444, 5900, 5985, 5986, 6667, 31337,
             ],
             scan_port_threshold: 15,
+            download_monitor: true,
+            watch_dirs: vec![],
+            download_extensions: vec![],
+            intel_url: "http://127.0.0.1:8000".into(),
             allowed_origins: vec![
                 "http://localhost:5173".into(),
                 "http://127.0.0.1:5173".into(),

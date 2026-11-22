@@ -5,6 +5,7 @@ import { BootScreen } from './components/Loader.jsx'
 import { ToastProvider } from './components/Feedback.jsx'
 import Icon from './components/Icon.jsx'
 import Dashboard from './pages/Dashboard.jsx'
+import Downloads from './pages/Downloads.jsx'
 import Firewall from './pages/Firewall.jsx'
 import Logs from './pages/Logs.jsx'
 import System from './pages/System.jsx'
@@ -14,6 +15,7 @@ import ThemeToggle from './theme/ThemeToggle.jsx'
 const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: 'layout' },
   { to: '/firewall', label: 'Firewall', icon: 'shield' },
+  { to: '/downloads', label: 'Downloads', icon: 'download' },
   { to: '/logs', label: 'Logs', icon: 'fileText' },
   { to: '/system', label: 'System', icon: 'box' },
 ]
@@ -75,6 +77,7 @@ export default function App() {
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<Dashboard status={status} />} />
             <Route path="/firewall" element={<Firewall status={status} />} />
+            <Route path="/downloads" element={<Downloads />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/system" element={<System />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />

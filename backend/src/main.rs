@@ -1,10 +1,16 @@
 mod agent;
+mod alert;
 mod api;
 mod cli;
 mod collector;
 mod config;
+mod dns;
+mod downloads;
 mod events;
+mod fileinfo;
 mod firewall;
+mod intel_client;
+mod isolation;
 mod logs;
 mod ports;
 #[cfg(windows)]

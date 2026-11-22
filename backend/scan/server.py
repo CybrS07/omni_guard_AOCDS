@@ -11,11 +11,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 import scan
+from intel import router as intel_router
 
 app = FastAPI(title="SOC Monitor Scan API")
 # only the local dashboard may call this from a browser
 app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
                    allow_methods=["*"], allow_headers=["*"])
+
+
+app.include_router(intel_router)   # VirusTotal + NVD lookups for the downloads watcher
 
 
 @app.get("/api/health")

@@ -5,6 +5,7 @@ use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::config::Config;
+use crate::downloads::Store as DownloadStore;
 use crate::firewall::Firewall;
 use crate::logs::Logger;
 use crate::system::SystemInfo;
@@ -169,6 +170,7 @@ pub struct AppState {
     pub alerts: RwLock<VecDeque<Alert>>,
     pub logger: Logger,
     pub firewall: Firewall,
+    pub downloads: DownloadStore,
     cooldowns: Mutex<HashMap<String, Instant>>,
     next_alert_id: Mutex<u64>,
 }
@@ -179,6 +181,7 @@ impl AppState {
         AppState {
             logger: Logger::new(dir),
             firewall: Firewall::new(demo),
+            downloads: DownloadStore::new(PathBuf::from(&cfg.data_dir).join("isolation")),
             cfg,
             demo,
             is_admin,

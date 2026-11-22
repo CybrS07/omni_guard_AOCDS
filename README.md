@@ -79,3 +79,24 @@ npm run ui             # page only (agent/scan already running)
 
 PC app: `npm run desktop:setup` once, then `npm run desktop:build` (Windows) - installer appears in `dist-desktop/`.
 Set `VITE_SCAN_GATE=off` in `frontend/.env.local` to skip the face-scan screen.
+
+Firewall > New rule > *Block by domain*: type a site (or paste a link), press Find IPs, then Block now.
+It resolves the domain in Rust (`backend/src/dns.rs`) and makes an outbound block rule for all its addresses.
+
+## Downloads check (task 2)
+
+New programs saved to Downloads/Desktop are checked automatically:
+
+| Step | File | Language |
+|---|---|---|
+| Watch folders, run the steps, keep the list | `backend/src/downloads.rs` | Rust |
+| Isolate (quarantine folder) / release / delete | `backend/src/isolation.rs` | Rust |
+| Read name, version, SHA-256, signature | `backend/src/fileinfo.rs` | Rust |
+| Send details to Python, get the verdict | `backend/src/intel_client.rs` | Rust |
+| Windows popup: Allow or Remove | `backend/src/alert.rs` | Rust |
+| VirusTotal + NVD lookups, verdict | `backend/scan/intel.py` | Python |
+| Downloads page + API key setup | `frontend/src/pages/Downloads.jsx` | React |
+
+Verdicts: **clean** and **vulnerable** (not malware) are saved back where you downloaded them (vulnerable also raises an alert);
+**malware**, **suspicious** and **unverified** stay isolated until you press Allow or Remove (popup or Downloads page).
+Add your free VirusTotal key on the Downloads page first. Options (`watch_dirs`, `download_extensions`, `download_monitor`, `intel_url`) go in `backend/config.json`.

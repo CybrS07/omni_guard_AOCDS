@@ -343,8 +343,46 @@ function NewRuleForm({ disabled, onCreated }) {
   const [f, setF] = useState(EMPTY)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [domain, setDomain] = useState('')
+  const [found, setFound] = useState(null) // {domain, ips[], sample}
+  const [looking, setLooking] = useState(false)
   const toast = useToast()
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }))
+
+  // Domain -> IPs: ask the agent to resolve it, then use the addresses in a rule
+  const lookup = async () => {
+    if (!domain.trim()) return
+    setLooking(true)
+    setErr('')
+    setFound(null)
+    try {
+      setFound(await api(`/dns/resolve?domain=${encodeURIComponent(domain)}`))
+    } catch (ex) {
+      setErr(ex.message)
+    } finally {
+      setLooking(false)
+    }
+  }
+  const dropIp = (ip) => setFound((x) => ({ ...x, ips: x.ips.filter((i) => i !== ip) }))
+  const useIps = () => {
+    setF((x) => ({ ...x, remote_ip: found.ips.join(','), direction: 'out', action: 'block', protocol: 'Any', name: x.name || `Block ${found.domain}` }))
+    toast('IPs added to the rule below; check it and press Create rule')
+  }
+  const blockDomain = async () => {
+    setLooking(true)
+    setErr('')
+    try {
+      await api('/firewall/rules', { method: 'POST', body: { name: `Block ${found.domain}`, direction: 'out', action: 'block', protocol: 'Any', remote_ip: found.ips.join(',') } })
+      toast(`${found.domain} blocked (${found.ips.length} addresses, outbound)`)
+      setFound(null)
+      setDomain('')
+      onCreated()
+    } catch (ex) {
+      setErr(ex.message)
+    } finally {
+      setLooking(false)
+    }
+  }
 
   const submit = async (e) => {
     e.preventDefault()
@@ -367,6 +405,31 @@ function NewRuleForm({ disabled, onCreated }) {
   return (
     <form className="panel" onSubmit={submit}>
       <div className="panel-head"><h2><Icon name="plusCircle" size={20} /> New rule</h2></div>
+      <div className="field full" style={{ marginBottom: 14 }}>
+        <label htmlFor="r-dom">Block by domain (finds the IPs for you)</label>
+        <div className="dom-row" style={{ display: 'flex', gap: 8 }}>
+          <input id="r-dom" className="input mono" placeholder="example.com or paste a link" value={domain}
+            onChange={(e) => setDomain(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), lookup())} />
+          <Button type="button" busy={looking && !found} disabled={!domain.trim()} onClick={lookup}>Find IPs</Button>
+        </div>
+        {found && (
+          <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
+            <div className="hint">
+              {found.domain} uses {found.ips.length} address{found.ips.length === 1 ? '' : 'es'}{found.sample ? ' (sample data: this demo machine has no DNS)' : ''}. Click an address to leave it out.
+            </div>
+            <div className="chip-row">
+              {found.ips.map((ip) => (
+                <button type="button" key={ip} className="pill flat info mono" title="Remove from the list" onClick={() => dropIp(ip)}>{ip} ✕</button>
+              ))}
+            </div>
+            <div className="toolbar">
+              <Button type="button" tone="danger" disabled={disabled || !found.ips.length} busy={looking} onClick={blockDomain}>Block {found.domain} now</Button>
+              <Button type="button" size="sm" disabled={!found.ips.length} onClick={useIps}>Use in rule below</Button>
+            </div>
+            <div className="hint">Big sites change addresses often. If the site comes back, look it up again and re-create the rule. Blocking applies to outbound traffic from this PC.</div>
+          </div>
+        )}
+      </div>
       <div className="form-grid">
         <div className="field full">
           <label htmlFor="r-name">Name</label>

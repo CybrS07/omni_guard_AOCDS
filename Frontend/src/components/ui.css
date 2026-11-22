@@ -100,3 +100,6 @@
 @keyframes fadein { to { opacity: 1; } }
 .boot-error { padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--danger) 60%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--danger) 9%, transparent); text-align: left; }
 .boot-error code { font-family: var(--mono); color: var(--icy); }
+
+/* domain lookup row in the firewall form */
+.dom-row .btn { white-space: nowrap; flex: none; }
