@@ -1,4 +1,4 @@
-SOC Monitor Agent
+Omni Guard AOCDS Agent
 =================
 A Windows service that collects system data (CPU, memory, GPU, temperatures, disks,
 network, applications, firewall rules, security events, folder-permission changes)

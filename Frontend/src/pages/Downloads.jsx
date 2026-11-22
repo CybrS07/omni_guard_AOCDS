@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useState } from 'react'
 import { api, usePoll } from '../api.js'
 import Button from '../components/Button.jsx'
 import { Confirm, useToast } from '../components/Feedback.jsx'
@@ -7,7 +7,7 @@ import Icon from '../components/Icon.jsx'
 import { Bars } from '../components/Loader.jsx'
 import { clock } from '../format.js'
 import { copyText } from '../export.js'
-import { scanApi } from '../scan/scanApi.js'
+import CheckServices from '../components/CheckServices.jsx'
 
 const STATUS = {
   analyzing: ['info', 'Checking…'],
@@ -27,11 +27,6 @@ const flatDownload = (i) => ({
   vt_malicious: i.verdict?.vt?.malicious ?? '', vt_suspicious: i.verdict?.vt?.suspicious ?? '', vt_report: i.verdict?.vt?.link || '',
   cve_count: i.verdict?.cve_count ?? '', max_cvss: i.verdict?.max_score ?? '', fixed_in: i.verdict?.fixed_in || '',
   cves: (i.verdict?.cves || []).map((c) => c.id).join(' '),
-})
-const flatSoftware = (x) => ({
-  name: x.name, version: x.version, publisher: x.publisher, install_date: x.install_date, status: x.status,
-  cve_count: x.cve_count, max_cvss: x.max_score, patch_available: x.patch_available, fixed_in: x.fixed_in,
-  cves: (x.cves || []).map((c) => c.id).join(' '), checked_at: x.checked_at,
 })
 
 export default function Downloads() {
@@ -116,9 +111,7 @@ export default function Downloads() {
         </div>
       </div>
 
-      <SoftwarePanel />
-
-      <KeysPanel />
+      <CheckServices />
 
       {ask && (
         <Confirm
@@ -182,174 +175,10 @@ function Detail({ i }) {
               </tbody>
             </table>
           )}
+          {!v.cves?.length && !v.notes?.some((n) => /NVD|CPE|product/i.test(n)) && <div className="hint"><b>No record found</b> in the NVD for this product and version.</div>}
           {v.notes?.map((n) => <div key={n} className="hint">{n}</div>)}
         </>
       )}
     </div>
-  )
-}
-
-/** Programs installed on this PC, each checked against NVD in the background by the agent. */
-function SoftwarePanel() {
-  const { data, error, reload } = usePoll('/software', 5000)
-  const toast = useToast()
-  const [open, setOpen] = useState(null)
-  const [q, setQ] = useState('')
-  const [onlyBad, setOnlyBad] = useState(false)
-  const all = data?.items || []
-  const items = all.filter((x) => (!onlyBad || x.status === 'vulnerable') && `${x.name} ${x.publisher}`.toLowerCase().includes(q.toLowerCase()))
-  const tone = { vulnerable: 'warn', ok: 'ok', unknown: 'info', pending: 'info' }
-  const label = { vulnerable: 'Vulnerable', ok: 'No known issues', unknown: 'Unknown', pending: 'Waiting…' }
-
-  const scanNow = async () => {
-    try {
-      await api('/software/rescan', { method: 'POST', body: {} })
-      toast('Scan requested')
-      reload()
-    } catch (e) {
-      toast(e.message, 'err')
-    }
-  }
-
-  return (
-    <div className="panel" style={{ marginBottom: 16 }}>
-      <div className="panel-head">
-        <h2><Icon name="box" size={20} /> Installed software</h2>
-        <div className="toolbar">
-          <ExportBar name="installed-software" rows={items.map(flatSoftware)} full={items} />
-          <Button size="sm" icon="refresh" onClick={scanNow}>Scan now</Button>
-        </div>
-      </div>
-      {error && <div className="empty">{error.message}</div>}
-      {data && (
-        <div className="toolbar" style={{ marginBottom: 10 }}>
-          <input className="input" placeholder="Filter by name or publisher" aria-label="Filter software" value={q} onChange={(e) => setQ(e.target.value)} />
-          <label className="hint" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <input type="checkbox" checked={onlyBad} onChange={(e) => setOnlyBad(e.target.checked)} /> only vulnerable
-          </label>
-          <span className="hint">
-            {data.total} programs · {data.vulnerable} vulnerable{data.pending ? ` · ${data.pending} still being checked` : ''}
-            {data.scanning ? ' · scanning…' : ''}{data.last_scan ? ` · last scan ${clock(data.last_scan)}` : ''}
-          </span>
-        </div>
-      )}
-      <div className="table-wrap">
-        <table>
-          <thead><tr><th>Program</th><th>Version</th><th>Publisher</th><th>Worst CVSS</th><th>Patch</th><th>Status</th></tr></thead>
-          <tbody>
-            {items.map((x) => (
-              <Fragment key={`${x.name}|${x.version}`}>
-                <tr onClick={() => setOpen(open === `${x.name}|${x.version}` ? null : `${x.name}|${x.version}`)} style={{ cursor: 'pointer' }}>
-                  <td>{x.name}</td>
-                  <td className="mono">{x.version || '-'}</td>
-                  <td className="muted">{x.publisher || '-'}</td>
-                  <td>{x.cve_count ? x.max_score : '-'}</td>
-                  <td>{x.status !== 'vulnerable' ? '-' : x.fixed_in ? `update to ${x.fixed_in}` : x.patch_available ? 'available' : 'none listed'}</td>
-                  <td><span className={`pill flat ${tone[x.status] || 'info'}`}>{label[x.status] || x.status}</span></td>
-                </tr>
-                {open === `${x.name}|${x.version}` && (
-                  <tr><td colSpan="6" style={{ background: 'var(--inset)' }}><SoftwareDetail x={x} /></td></tr>
-                )}
-              </Fragment>
-            ))}
-            {data && items.length === 0 && <tr><td colSpan="6" className="empty">{all.length ? 'No program matches the filter.' : data.enabled ? 'The first scan is starting. This can take a few minutes.' : 'Software checking is switched off in config.json.'}</td></tr>}
-          </tbody>
-        </table>
-      </div>
-      <p className="hint" style={{ margin: '10px 0 0' }}>Matched by name and version against the NVD vulnerability database. Without an NVD key each program takes about 15 seconds; add NVD_API_KEY to the .env file to speed this up.</p>
-    </div>
-  )
-}
-
-function SoftwareDetail({ x }) {
-  const toast = useToast()
-  const copy = async (text, what) => toast((await copyText(text)) ? `${what} copied` : 'Copy was blocked by the browser', 'ok')
-  return (
-    <div style={{ display: 'grid', gap: 10, padding: '6px 2px' }}>
-      <div className="toolbar">
-        <Button size="sm" icon="fileText" onClick={() => copy(`${x.name} ${x.version}\nPublisher: ${x.publisher}\nStatus: ${x.status}\nCVEs: ${(x.cves || []).map((c) => c.id).join(', ')}`, 'Details')}>Copy details</Button>
-        <Button size="sm" icon="fileText" onClick={() => copy(JSON.stringify(x, null, 2), 'JSON')}>Copy as JSON</Button>
-      </div>
-      {x.cves?.length > 0 && (
-        <table>
-          <thead><tr><th>CVE</th><th>Score</th><th>Patch</th><th>What</th></tr></thead>
-          <tbody>
-            {x.cves.map((c) => (
-              <tr key={c.id}>
-                <td className="mono nw"><a href={`https://nvd.nist.gov/vuln/detail/${c.id}`} target="_blank" rel="noreferrer">{c.id}</a></td>
-                <td>{c.score} {c.severity}</td>
-                <td>{c.fixed_in ? `fixed in ${c.fixed_in}` : c.patch_available ? 'available' : 'none listed'}</td>
-                <td className="muted">{c.summary}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      {x.notes?.map((n) => <div key={n} className="hint">{n}</div>)}
-      {!x.cves?.length && !x.notes?.length && <div className="hint">No known vulnerabilities for this version{x.checked_at ? ` (checked ${clock(x.checked_at)})` : ''}.</div>}
-    </div>
-  )
-}
-
-/** API keys for VirusTotal / NVD. They are sent to the local Python service and never shown again. */
-function KeysPanel() {
-  const toast = useToast()
-  const [st, setSt] = useState(null)
-  const [err, setErr] = useState('')
-  const [vt, setVt] = useState('')
-  const [nvd, setNvd] = useState('')
-  const [busy, setBusy] = useState(false)
-
-  useEffect(() => {
-    scanApi('/intel/status').then(setSt).catch((e) => setErr(e.message))
-  }, [])
-
-  const save = async (e) => {
-    e.preventDefault()
-    const body = {}
-    if (vt.trim()) body.vt_api_key = vt.trim()
-    if (nvd.trim()) body.nvd_api_key = nvd.trim()
-    if (!Object.keys(body).length) return
-    setBusy(true)
-    setErr('')
-    try {
-      setSt(await scanApi('/intel/config', { method: 'POST', body }))
-      setVt('')
-      setNvd('')
-      toast('API keys saved')
-    } catch (ex) {
-      setErr(ex.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <form className="panel" onSubmit={save}>
-      <div className="panel-head">
-        <h2><Icon name="lock" size={20} /> Check services</h2>
-        {st && (
-          <div className="chip-row">
-            <span className={`pill flat ${st.vt_configured ? 'ok' : 'warn'}`}>VirusTotal key: {st.vt_configured ? 'set' : 'missing'}</span>
-            <span className={`pill flat ${st.nvd_configured ? 'ok' : 'info'}`}>NVD key: {st.nvd_configured ? 'set' : 'not set (optional)'}</span>
-          </div>
-        )}
-      </div>
-      <div className="form-grid">
-        <div className="field">
-          <label htmlFor="k-vt">VirusTotal API key</label>
-          <input id="k-vt" className="input mono" type="password" autoComplete="off" placeholder={st?.vt_configured ? 'saved - type to replace' : 'paste your key'} value={vt} onChange={(e) => setVt(e.target.value)} />
-        </div>
-        <div className="field">
-          <label htmlFor="k-nvd">NVD API key (optional, faster)</label>
-          <input id="k-nvd" className="input mono" type="password" autoComplete="off" placeholder={st?.nvd_configured ? 'saved - type to replace' : 'optional'} value={nvd} onChange={(e) => setNvd(e.target.value)} />
-        </div>
-      </div>
-      {err && <div className="form-error" role="alert">{err}</div>}
-      <div className="toolbar" style={{ justifyContent: 'space-between', marginTop: 14 }}>
-        <span className="hint">Best place for keys: the .env file in the project folder (VT_API_KEY, NVD_API_KEY). Keys typed here work too. Only a file's hash, name and version are sent, never the file.</span>
-        <Button type="submit" variant="primary" busy={busy} disabled={!vt.trim() && !nvd.trim()}>Save keys</Button>
-      </div>
-    </form>
   )
 }

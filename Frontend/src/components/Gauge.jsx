@@ -1,4 +1,4 @@
-const COLORS = { idle: 'var(--idle)', normal: 'var(--accent)', high: 'var(--warn)', critical: 'var(--danger)' }
+const COLORS = { idle: 'var(--idle)', normal: 'var(--chart-1)', high: 'var(--warn)', critical: 'var(--danger)' }
 
 export default function Gauge({ value = 0, status = 'normal', label, size = 92 }) {
   const r = 38

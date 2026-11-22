@@ -1,0 +1,36 @@
+# Runs on every push and pull request: tests the Rust agent, checks the Python service, builds the dashboard.
+# Nothing here needs secrets.
+name: CI
+
+on:
+  push:
+    branches-ignore: [main]   # main is covered by release.yml (it runs the same checks before building)
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: backend }
+      - run: cargo test --manifest-path backend/Cargo.toml
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --project backend/scan
+      - name: Syntax check
+        run: uv run --project backend/scan python -m compileall -q backend/scan
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: npm --prefix frontend ci
+      - run: npm --prefix frontend run build

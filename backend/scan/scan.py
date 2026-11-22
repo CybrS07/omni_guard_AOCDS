@@ -26,7 +26,17 @@ DB_FILE = JSONS / "users.json"
 for d in (JSONS, XMLS, LOGS):
     d.mkdir(parents=True, exist_ok=True)
 
-THRESHOLD = 85.0            # % face match needed (set 90.0 for stricter)
+def _threshold() -> float:
+    """% face match needed to log in. Default 95. Override with FACE_MATCH_PERCENT=97 in .env (never below 80)."""
+    try:
+        import intel
+        raw = os.environ.get("FACE_MATCH_PERCENT") or intel._dotenv().get("FACE_MATCH_PERCENT") or "95"
+        return max(80.0, min(100.0, float(raw)))
+    except Exception:
+        return 95.0
+
+
+THRESHOLD = _threshold()
 MIN_PASSWORD = 4
 MIN_VARIATIONS = 9          # at least 3 good poses x 3 lighting levels
 MAX_FAILS, LOCK_SECONDS = 5, 60

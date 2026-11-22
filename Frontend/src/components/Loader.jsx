@@ -25,7 +25,7 @@ export function BootScreen({ error, onRetry }) {
     <div className="boot">
       <div className="boot-card">
         <Radar size={150} />
-        <h1>SOC MONITOR</h1>
+        <h1>OMNI GUARD AOCDS</h1>
         <div className="boot-steps">
           <div>&gt; starting collectors…</div>
           <div>&gt; reading firewall policy…</div>

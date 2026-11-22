@@ -1,7 +1,7 @@
-// SOC Monitor desktop shell (Electron).
+// Omni Guard AOCDS desktop shell (Electron).
 //   packaged:  starts soc-agent.exe + soc-scan.exe, serves the dashboard, opens one window.
 //   --dev:     only opens a window on the Vite dev server (which starts the agent + scan itself).
-const { app, BrowserWindow, session, shell } = require('electron')
+const { app, BrowserWindow, dialog, session, shell } = require('electron')
 const { spawn, spawnSync } = require('node:child_process')
 const crypto = require('node:crypto')
 const net = require('node:net')
@@ -34,6 +34,34 @@ function stopAll() {
   }
 }
 
+// Self-update: the release workflow (.github/workflows/release.yml) publishes every new build to GitHub Releases;
+// the installed app checks there on start and every 4 hours, downloads the update and installs it when you quit.
+function setupUpdates(win) {
+  if (DEV || !app.isPackaged) return
+  let autoUpdater
+  try {
+    ;({ autoUpdater } = require('electron-updater'))
+  } catch (e) {
+    console.error('[update] electron-updater missing:', e.message)
+    return
+  }
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.on('error', (e) => console.error('[update]', e?.message || e))
+  autoUpdater.on('update-downloaded', async (info) => {
+    if (win.isDestroyed()) return
+    const r = await dialog.showMessageBox(win, {
+      type: 'info', buttons: ['Restart now', 'Later'], defaultId: 0, cancelId: 1,
+      title: 'Update ready', message: `Omni Guard AOCDS ${info.version} is ready`,
+      detail: 'Restart to finish updating. If you choose Later it installs the next time you close the app.',
+    })
+    if (r.response === 0) autoUpdater.quitAndInstall()
+  })
+  const check = () => autoUpdater.checkForUpdates().catch((e) => console.error('[update]', e?.message || e))
+  check()
+  setInterval(check, 4 * 60 * 60 * 1000)
+}
+
 async function boot() {
   let origin = DEV_URL
   let key = null
@@ -64,7 +92,7 @@ async function boot() {
   session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => cb(perm === 'media' && wc.getURL().startsWith(origin)))
 
   const win = new BrowserWindow({
-    width: 1360, height: 860, minWidth: 980, minHeight: 640, title: 'SOC Monitor', backgroundColor: '#1c0221', autoHideMenuBar: true,
+    width: 1360, height: 860, minWidth: 980, minHeight: 640, title: 'Omni Guard AOCDS', backgroundColor: '#1c0221', autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   })
   win.webContents.setWindowOpenHandler(({ url }) => (/^https:/.test(url) && shell.openExternal(url), { action: 'deny' }))
@@ -75,6 +103,7 @@ async function boot() {
     try { await win.loadURL(origin) } catch { if (!win.isDestroyed()) setTimeout(load, 1500) }
   }
   load()
+  setupUpdates(win)
 }
 
 if (!app.requestSingleInstanceLock()) app.quit()

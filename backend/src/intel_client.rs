@@ -9,7 +9,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 /// POST `body` as JSON to `base` + `path` (base looks like "http://127.0.0.1:8000") -> response JSON.
-fn post_json(base: &str, path: &str, body: &Value) -> Result<Value, String> {
+pub fn post_json(base: &str, path: &str, body: &Value) -> Result<Value, String> {
     let hostport = base.strip_prefix("http://").ok_or("intel_url must start with http://")?.trim_end_matches('/');
     let payload = body.to_string();
     let addr = hostport.to_socket_addrs().map_err(|e| e.to_string())?.next().ok_or("bad intel_url")?;

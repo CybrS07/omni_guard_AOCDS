@@ -1,13 +1,14 @@
 [project]
 name = "soc-scan"
 version = "0.1.0"
-description = "Face + password scan service for SOC Monitor (local API on 127.0.0.1:8000)"
+description = "Face + password scan service for Omni Guard AOCDS (local API on 127.0.0.1:8000)"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "opencv-python-headless>=4.9",
     "numpy>=1.26",
+    "pillow>=10.3",
 ]
 
 [tool.uv]

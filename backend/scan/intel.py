@@ -67,6 +67,10 @@ def _write_json(path: Path, data, private: bool = False):
     os.replace(tmp, path)
 
 
+def _program_data() -> Path:
+    return Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "SocMonitor"
+
+
 def _env_files() -> list[Path]:
     """Where a .env may live: SOC_ENV_FILE, the project root, next to the packaged exe, the working dir."""
     c = []
@@ -74,6 +78,8 @@ def _env_files() -> list[Path]:
         c.append(Path(os.environ["SOC_ENV_FILE"]))
     c.append(Path(__file__).resolve().parents[2] / ".env")
     if getattr(sys, "frozen", False):
+        # installed app: ProgramData survives updates (the program folder is replaced by every update)
+        c.append(_program_data() / ".env")
         c.append(Path(sys.executable).resolve().parent / ".env")
     c.append(Path.cwd() / ".env")
     return c
@@ -121,7 +127,7 @@ def _cache_put(key: str, value):
 
 # ---------------------------------------------------------------- http (one function so tests can replace it)
 def _http_json(url: str, headers: dict | None = None, timeout: int = 25):
-    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "soc-monitor", **(headers or {})})
+    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "omni-guard-aocds", **(headers or {})})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, json.loads(r.read().decode("utf-8", "replace"))
@@ -246,7 +252,7 @@ def vuln_lookup(product: str, company: str, version: str, key: str) -> tuple[lis
     try:
         cpe = find_cpe(product, company, key)
         if not cpe:
-            return [], f"'{product}' was not found in the NVD product list."
+            return [], f"'{product}' was not found in the NVD product list (no record found)."
         return nvd_cves(cpe[0], cpe[1], version, key), ""
     except Exception:  # NVD answered something unexpected: report it, do not fail the whole check
         return [], "The NVD vulnerability lookup failed, so vulnerabilities were not checked."
@@ -334,6 +340,8 @@ def software(sw: SoftwareIn):
         return {**cached, "cached": True}
     k = keys()
     cves, note = vuln_lookup(sw.name, sw.publisher, sw.version, k["nvd"])
+    if not cves and "no record found" in note:
+        note = ""  # the NVD simply has no entry for this product: that is a result, not a problem
     if cves:
         status = "vulnerable"
     elif note:
@@ -352,15 +360,76 @@ def software(sw: SoftwareIn):
     return result
 
 
-# ---------------------------------------------------------------- settings (API keys)
+# ---------------------------------------------------------------- manual checks (Downloads page "Check services")
+class HashIn(BaseModel):
+    sha256: str = Field(pattern=r"^[A-Fa-f0-9]{64}$")
+
+
+@router.post("/hash")
+def hash_check(h: HashIn):
+    """Look one SHA-256 up on VirusTotal (nothing is uploaded)."""
+    k = keys()
+    sha = h.sha256.lower()
+    vt = vt_lookup(sha, k["vt"])
+    notes = []
+    if not vt["configured"]:
+        notes.append("VirusTotal key not set: add VT_API_KEY to the .env file (or paste it in Settings).")
+    if vt["error"]:
+        notes.append(vt["error"])
+    if vt["configured"] and not vt["error"] and not vt["known"]:
+        notes.append("No record found: VirusTotal has never seen this file.")
+    status = "unknown"
+    if vt["known"]:
+        status = "malware" if vt["malicious"] >= MALWARE_AT else "suspicious" if vt["malicious"] + vt["suspicious"] > 0 else "clean"
+    return {"sha256": sha, "status": status, "vt": vt, "notes": notes, "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+
+
+# ---------------------------------------------------------------- settings (API keys -> .env)
 class ConfigIn(BaseModel):
     vt_api_key: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9_-]*$")
     nvd_api_key: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9_-]*$")
 
 
+def _env_target() -> Path:
+    """The .env file to write: the first one that already exists, otherwise the project root (or next to the exe)."""
+    for f in _env_files():
+        if f.exists():
+            return f
+    if os.environ.get("SOC_ENV_FILE"):
+        return Path(os.environ["SOC_ENV_FILE"])
+    if getattr(sys, "frozen", False):
+        return _program_data() / ".env"
+    return Path(__file__).resolve().parents[2] / ".env"
+
+
+def _set_env(name: str, value: str) -> None:
+    f = _env_target()
+    lines = []
+    try:
+        lines = f.read_text(encoding="utf-8-sig").splitlines()
+    except OSError:
+        pass
+    out, done = [], False
+    for line in lines:
+        if line.split("=", 1)[0].strip() == name:
+            if not done:
+                out.append(f"{name}={value}")
+            done = True
+        else:
+            out.append(line)
+    if not done:
+        out.append(f"{name}={value}")
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("\n".join(out) + "\n", encoding="utf-8")
+    try:
+        os.chmod(f, 0o600)
+    except OSError:
+        pass
+
+
 def _status() -> dict:
     k = keys()
-    return {"vt_configured": bool(k["vt"]), "nvd_configured": bool(k["nvd"]), "malware_threshold": MALWARE_AT}
+    return {"vt_configured": bool(k["vt"]), "nvd_configured": bool(k["nvd"]), "malware_threshold": MALWARE_AT, "env_file": str(_env_target())}
 
 
 @router.get("/status")
@@ -370,12 +439,10 @@ def status():
 
 @router.post("/config")
 def config(c: ConfigIn):
-    """Save keys. Omit a field to keep it, send "" to remove it. Keys are never returned."""
+    """Save keys into the .env file. Omit a field to keep it, send "" to remove it. Keys are never returned."""
     with _lock:
-        cfg = _read_json(CFG_FILE, {})
         if c.vt_api_key is not None:
-            cfg["vt_api_key"] = c.vt_api_key
+            _set_env("VT_API_KEY", c.vt_api_key)
         if c.nvd_api_key is not None:
-            cfg["nvd_api_key"] = c.nvd_api_key
-        _write_json(CFG_FILE, cfg, private=True)
+            _set_env("NVD_API_KEY", c.nvd_api_key)
     return _status()

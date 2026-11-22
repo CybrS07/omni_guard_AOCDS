@@ -1,0 +1,69 @@
+# Every push to main builds the Windows installer and publishes it as a GitHub Release.
+# Installed copies of the app check that release by themselves (electron-updater) and update themselves,
+# so you never have to rebuild or reinstall by hand.
+#
+# Version number = <major.minor from desktop/package.json>.<run number>, e.g. 0.2.17  (always goes up).
+# No secrets to add: GITHUB_TOKEN is provided by GitHub. (The repository must allow "Read and write
+# permissions" for workflows: Settings > Actions > General > Workflow permissions.)
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: backend }
+      - run: cargo test --manifest-path backend/Cargo.toml
+
+  installer:
+    needs: tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: backend }
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Work out the version
+        id: ver
+        shell: bash
+        run: |
+          base=$(node -p "require('./desktop/package.json').version.split('.').slice(0,2).join('.')")
+          echo "version=${base}.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: npm run setup
+
+      - name: Build dashboard, agent and scan service
+        run: |
+          npm run build:ui
+          npm run build:agent
+          npm run build:scan
+
+      - name: Build the installer and publish the release
+        working-directory: desktop
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npm install
+          npm version "${{ steps.ver.outputs.version }}" --no-git-tag-version --allow-same-version
+          npx electron-builder --win --x64 --publish always

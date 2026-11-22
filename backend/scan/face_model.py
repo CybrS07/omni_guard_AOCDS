@@ -86,7 +86,7 @@ class FaceModel:
     # ---- classify ----
     @staticmethod
     def percent(cos: float) -> float:
-        """cosine -> 0-100 score. 0.363 (official threshold) = 85%, 0.60+ = 100%."""
+        """cosine -> 0-100 score. 0.363 (official threshold) = 90%, 0.44 = 95%, 0.60+ = 100%."""
         if cos <= 0:
             return 0.0
         if cos < COS_MATCH:

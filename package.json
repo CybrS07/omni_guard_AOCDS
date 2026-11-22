@@ -1,8 +1,8 @@
 {
-  "name": "soc-monitor",
+  "name": "omni-guard-aocds",
   "private": true,
   "version": "0.1.0",
-  "description": "Windows SOC monitor: Rust agent (service) + React/Vite dashboard",
+  "description": "Omni Guard AOCDS: Rust agent (service) + React/Vite dashboard",
   "scripts": {
     "setup": "npm install && npm --prefix frontend install && uv sync --project backend/scan",
     "dev": "npm --prefix frontend run dev",

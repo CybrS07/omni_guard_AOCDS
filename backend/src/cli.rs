@@ -9,7 +9,7 @@ use crate::util::{detect_admin, run};
 use std::path::PathBuf;
 
 const NAME: &str = "SocMonitorAgent";
-const DISPLAY: &str = "SOC Monitor Agent";
+const DISPLAY: &str = "Omni Guard AOCDS Agent";
 
 pub enum Action {
     /// Not a management command: run the agent normally.
@@ -38,7 +38,7 @@ pub fn dispatch(args: &[String]) -> Action {
     }
 }
 
-const HELP: &str = "soc-agent - Windows SOC monitoring agent
+const HELP: &str = "soc-agent - Omni Guard AOCDS Windows monitoring agent
 
 USAGE:
   soc-agent [run]       run in this console (Ctrl+C to stop)

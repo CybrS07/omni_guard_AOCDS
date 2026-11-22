@@ -31,6 +31,8 @@ pub struct Config {
     /// File types that get isolated and checked. Empty = exe, dll, msi, msix, appx, scr, bat, cmd, ps1, psm1,
     /// vbs, js, jar, com, lnk, sh, bash, zip, 7z, rar, tar, gz, tgz. ("*.exe", ".exe" and "exe" all mean the same.)
     pub download_extensions: Vec<String>,
+    /// Also scan every new file (pictures, documents, videos, archives, anything) in the watched folders for hidden scripts / zip bombs.
+    pub scan_download_files: bool,
     /// Also watch the Downloads/Desktop/home folders of running WSL (Linux) distributions.
     pub watch_wsl: bool,
     /// Check every installed program against NVD in the background.
@@ -75,7 +77,8 @@ impl Default for Config {
             watch_dirs: vec![],
             download_extensions: vec![],
             watch_wsl: true,
-            software_check: true,
+            scan_download_files: true,
+            software_check: false,
             intel_url: "http://127.0.0.1:8000".into(),
             allowed_origins: vec![
                 "http://localhost:5173".into(),

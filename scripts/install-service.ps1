@@ -31,8 +31,8 @@ if (-not (Test-Path (Join-Path $install 'config.json'))) {
 icacls $install /inheritance:r /grant:r 'SYSTEM:(OI)(CI)F' 'Administrators:(OI)(CI)F' 'Users:(OI)(CI)RX' | Out-Null
 
 Write-Host '==> Registering service'
-sc.exe create $name binPath= "`"$exe`" --service" start= auto DisplayName= 'SOC Monitor Agent' | Out-Null
-sc.exe description $name 'Collects system metrics, firewall data and security logs for the SOC Monitor dashboard.' | Out-Null
+sc.exe create $name binPath= "`"$exe`" --service" start= auto DisplayName= 'Omni Guard AOCDS Agent' | Out-Null
+sc.exe description $name 'Collects system metrics, firewall data and security logs for the Omni Guard AOCDS dashboard.' | Out-Null
 sc.exe failure $name reset= 86400 actions= restart/5000/restart/5000/restart/30000 | Out-Null
 Start-Service $name
 

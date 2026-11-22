@@ -58,6 +58,11 @@ pub fn router(st: Shared) -> Router {
         .route("/api/dns/resolve", get(dns_resolve))
         .route("/api/downloads", get(downloads_list))
         .route("/api/downloads/decision", post(downloads_decide))
+        .route("/api/filescan/browse", get(filescan_browse))
+        .route("/api/filescan/start", post(filescan_start))
+        .route("/api/filescan/status", get(filescan_status))
+        .route("/api/filescan/cancel", post(filescan_cancel))
+        .route("/api/filescan/monitor", get(filescan_monitor))
         .route("/api/software", get(software_list))
         .route("/api/software/rescan", post(software_rescan))
         .layer(middleware::from_fn_with_state(st.clone(), guard))
@@ -439,6 +444,65 @@ async fn downloads_decide(State(st): State<Shared>, Json(b): Json<DecisionBody>)
     let s = st.clone();
     let item = blocking(move || crate::downloads::resolve(&s, &b.id, b.allow, "dashboard")).await?.map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(json!({ "item": item })))
+}
+
+// ------------------------------------------------------------------ folder scan (hidden scripts / zip bombs)
+
+#[derive(Deserialize)]
+struct BrowseQ {
+    #[serde(default)]
+    path: String,
+}
+
+async fn filescan_browse(Query(q): Query<BrowseQ>) -> ApiResult {
+    let v = blocking(move || crate::filescan::browse(&q.path)).await?.map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(v))
+}
+
+#[derive(Deserialize)]
+struct StartBody {
+    path: String,
+    #[serde(default = "yes")]
+    recursive: bool,
+    /// file extensions to include ("png", "*.zip", ".exe" all work); empty = every file
+    #[serde(default)]
+    extensions: Vec<String>,
+    /// folders to skip (full path or folder name)
+    #[serde(default)]
+    exclude: Vec<String>,
+}
+fn yes() -> bool {
+    true
+}
+
+async fn filescan_start(State(st): State<Shared>, Json(b): Json<StartBody>) -> ApiResult {
+    let extensions = b.extensions.iter().map(|e| e.trim().trim_start_matches('*').trim_start_matches('.').to_lowercase()).filter(|e| !e.is_empty()).collect();
+    let opts = crate::filescan::Opts { recursive: b.recursive, extensions, exclude: b.exclude };
+    let id = crate::filescan::start(&st, &b.path, opts).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(json!({ "id": id })))
+}
+
+#[derive(Deserialize)]
+struct StatusQ {
+    id: Option<String>,
+}
+
+async fn filescan_status(State(st): State<Shared>, Query(q): Query<StatusQ>) -> Json<Value> {
+    Json(json!({ "job": st.filescan.status(q.id.as_deref()) }))
+}
+
+async fn filescan_monitor(State(st): State<Shared>) -> Json<Value> {
+    let watching: Vec<String> = crate::downloads::watch_dirs(&st.cfg).iter().map(|p| p.display().to_string()).collect();
+    Json(json!({ "enabled": st.cfg.download_monitor && st.cfg.scan_download_files, "watching": watching, "items": st.filescan.monitor_items() }))
+}
+
+#[derive(Deserialize)]
+struct CancelBody {
+    id: String,
+}
+
+async fn filescan_cancel(State(st): State<Shared>, Json(b): Json<CancelBody>) -> ApiResult {
+    Ok(Json(json!({ "cancelled": st.filescan.cancel(&b.id) })))
 }
 
 // ------------------------------------------------------------------ installed software (NVD)

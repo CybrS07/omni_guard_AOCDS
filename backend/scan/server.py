@@ -1,4 +1,4 @@
-"""Face-scan API for the SOC Monitor frontend (127.0.0.1 only).
+"""Face-scan API for the Omni Guard AOCDS frontend (127.0.0.1 only).
 Run from backend/scan:   uv run uvicorn server:app --host 127.0.0.1 --port 8000
 The dashboard reaches it through the /scan-api proxy, so it needs no CORS access."""
 import sys
@@ -12,19 +12,21 @@ from pydantic import BaseModel
 
 import scan
 from intel import router as intel_router
+from filescan import router as filescan_router
 
-app = FastAPI(title="SOC Monitor Scan API")
+app = FastAPI(title="Omni Guard AOCDS Scan API")
 # only the local dashboard may call this from a browser
 app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
                    allow_methods=["*"], allow_headers=["*"])
 
 
+app.include_router(filescan_router)  # hidden scripts in images / documents / archives
 app.include_router(intel_router)   # VirusTotal + NVD lookups for the downloads watcher
 
 
 @app.get("/api/health")
 def health():
-    return {"ok": True}
+    return {"ok": True, "face_match_percent": scan.THRESHOLD}
 
 
 class Sample(BaseModel):

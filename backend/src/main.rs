@@ -7,6 +7,7 @@ mod config;
 mod dns;
 mod downloads;
 mod events;
+mod filescan;
 mod fileinfo;
 mod firewall;
 mod intel_client;

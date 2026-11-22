@@ -3,12 +3,13 @@
    Components and pages use the variables below (var(--accent), var(--panel), ...), never
    raw hex values. To restyle the app edit this file; to switch mode see ThemeProvider.jsx
    (it sets <html data-theme="dark|light">).
+
+   DARK  = Midnight Violet #1C0221  +  Brick Ember #B80C09  +  White #FFFFFF
+   LIGHT = Coral Glow #FF7F51       +  Imperial Blue #01295F +  Wine Plum #702632
    ===================================================================================== */
 
-/* ===== Palette (from the supplied swatches) =====
-   Midnight Violet #1C0221 / Brick Ember #B80C09 / White #FFFFFF
-   Coral Glow #FF7F51 / Imperial Blue #01295F / Wine Plum #702632 */
 :root {
+  /* the six swatches */
   --midnight: #1c0221;
   --brick: #b80c09;
   --white: #ffffff;
@@ -17,70 +18,72 @@
   --plum: #702632;
   color-scheme: dark;
 
-  /* ---- DARK (default): Midnight Violet surfaces, Coral accent, Brick/Plum details ---- */
+  /* ---- DARK (default): Midnight Violet surfaces, Brick Ember accent, White text ---- */
   --bg: var(--midnight);
-  --glow-1: color-mix(in srgb, var(--plum) 55%, transparent);
-  --glow-2: color-mix(in srgb, var(--brick) 22%, transparent);
-  --panel: color-mix(in srgb, var(--midnight) 86%, var(--plum));
-  --panel-2: color-mix(in srgb, var(--midnight) 72%, var(--plum));
-  --sidebar-bg: linear-gradient(180deg, color-mix(in srgb, var(--midnight) 80%, var(--plum)), var(--midnight));
-  --pop-bg: color-mix(in srgb, var(--midnight) 82%, var(--plum));
-  --input-bg: color-mix(in srgb, var(--midnight) 82%, #000000);
-  --inset: color-mix(in srgb, #000000 35%, transparent);
-  --line: color-mix(in srgb, var(--plum) 70%, transparent);
-  --line-strong: color-mix(in srgb, var(--coral) 45%, transparent);
-  --accent-2: color-mix(in srgb, var(--coral) 55%, var(--white));  /* lighter accent (gradient end, highlights) */
-  --tint: var(--plum);                                           /* mid tone: hovers, tracks, soft fills */
-  --bg-deep: var(--midnight);                                    /* darkest surface */
+  --glow-1: color-mix(in srgb, var(--brick) 34%, transparent);
+  --glow-2: color-mix(in srgb, var(--brick) 14%, transparent);
+  --panel: color-mix(in srgb, var(--midnight) 90%, var(--white));
+  --panel-2: color-mix(in srgb, var(--midnight) 80%, var(--white));
+  --sidebar-bg: linear-gradient(180deg, color-mix(in srgb, var(--midnight) 82%, var(--brick)), var(--midnight));
+  --pop-bg: color-mix(in srgb, var(--midnight) 86%, var(--white));
+  --input-bg: color-mix(in srgb, var(--midnight) 84%, #000000);
+  --inset: color-mix(in srgb, #000000 32%, transparent);
+  --line: color-mix(in srgb, var(--white) 14%, transparent);
+  --line-strong: color-mix(in srgb, var(--brick) 75%, var(--white) 10%);
+  --accent: var(--brick);                                          /* fills, borders, buttons (white text on it) */
+  --accent-2: color-mix(in srgb, var(--brick) 55%, var(--white));  /* lighter: gradient end, highlights, text on dark */
+  --chart-1: color-mix(in srgb, var(--brick) 58%, var(--white));   /* line/bar colour that stays visible on the dark panel */
+  --series-2: color-mix(in srgb, var(--white) 82%, var(--midnight));
+  --tint: color-mix(in srgb, var(--brick) 40%, var(--midnight));   /* mid tone: hovers, tracks, soft fills */
+  --bg-deep: var(--midnight);
   --text: var(--white);
-  --muted: color-mix(in srgb, var(--white) 62%, var(--plum));
-  --accent: var(--coral);
+  --muted: color-mix(in srgb, var(--white) 62%, var(--midnight));
+  --idle: color-mix(in srgb, var(--white) 50%, var(--midnight));
   --ok: #4fd1a1;
-  --idle: color-mix(in srgb, var(--white) 55%, var(--plum));
-  --series-2: color-mix(in srgb, var(--brick) 80%, var(--coral));
   --warn: #f2b84b;
-  --danger: #ff4d4a;
-  --knob: color-mix(in srgb, var(--white) 70%, var(--plum));
-  --knob-on: #ffffff;           /* switch knob when ON */
-  --sheen: rgba(255, 255, 255, .45);  /* light sweep on primary buttons */
-  --danger-soft: #ff9b97;
-  --on-accent: var(--midnight); /* text/icons drawn on top of accent-coloured fills */
-  --scrim: rgba(14, 1, 17, .74); /* dim layer behind modals */
+  --danger: #ff6b66;
+  --knob: color-mix(in srgb, var(--white) 70%, var(--midnight));
+  --knob-on: #ffffff;
+  --sheen: rgba(255, 255, 255, .4);
+  --danger-soft: #ffb3b0;
+  --on-accent: var(--white);
+  --scrim: rgba(14, 1, 17, .76);
   --shadow: 0 30px 80px rgba(0, 0, 0, .6);
   --shadow-sm: 0 10px 30px rgba(0, 0, 0, .45);
 }
 
-/* ---- LIGHT: White surfaces, Imperial Blue text + accent, Wine Plum / Coral details ---- */
+/* ---- LIGHT: Coral Glow surfaces, Imperial Blue text + accent, Wine Plum for danger / 2nd series ---- */
 :root[data-theme='light'] {
   color-scheme: light;
-  --bg: var(--white);
-  --glow-1: color-mix(in srgb, var(--coral) 16%, transparent);
-  --glow-2: color-mix(in srgb, var(--imperial) 8%, transparent);
-  --panel: #ffffff;
-  --panel-2: color-mix(in srgb, var(--imperial) 4%, #ffffff);
-  --sidebar-bg: linear-gradient(180deg, #ffffff, color-mix(in srgb, var(--coral) 10%, #ffffff));
-  --pop-bg: #ffffff;
-  --input-bg: color-mix(in srgb, var(--imperial) 3%, #ffffff);
-  --inset: color-mix(in srgb, var(--imperial) 5%, #ffffff);
-  --line: color-mix(in srgb, var(--imperial) 16%, transparent);
-  --line-strong: color-mix(in srgb, var(--imperial) 45%, transparent);
-  --accent-2: color-mix(in srgb, var(--imperial) 55%, var(--coral));
-  --tint: var(--imperial);
-  --bg-deep: color-mix(in srgb, var(--imperial) 10%, #ffffff);
-  --text: var(--imperial);
-  --muted: color-mix(in srgb, var(--imperial) 62%, #ffffff);
+  --bg: color-mix(in srgb, var(--coral) 16%, var(--white));
+  --glow-1: color-mix(in srgb, var(--coral) 55%, transparent);
+  --glow-2: color-mix(in srgb, var(--imperial) 10%, transparent);
+  --panel: color-mix(in srgb, var(--coral) 5%, var(--white));
+  --panel-2: color-mix(in srgb, var(--coral) 14%, var(--white));
+  --sidebar-bg: linear-gradient(180deg, var(--coral), color-mix(in srgb, var(--coral) 70%, var(--white)));
+  --pop-bg: color-mix(in srgb, var(--coral) 5%, var(--white));
+  --input-bg: color-mix(in srgb, var(--coral) 4%, var(--white));
+  --inset: color-mix(in srgb, var(--coral) 12%, var(--white));
+  --line: color-mix(in srgb, var(--imperial) 18%, transparent);
+  --line-strong: color-mix(in srgb, var(--imperial) 60%, transparent);
   --accent: var(--imperial);
-  --ok: #0f7a56;
-  --idle: color-mix(in srgb, var(--imperial) 45%, #ffffff);
+  --accent-2: color-mix(in srgb, var(--imperial) 60%, var(--coral));
+  --chart-1: var(--imperial);
   --series-2: var(--plum);
-  --warn: #a86400;
-  --danger: var(--brick);
+  --tint: color-mix(in srgb, var(--coral) 45%, var(--white));
+  --bg-deep: color-mix(in srgb, var(--coral) 28%, var(--white));
+  --text: var(--imperial);
+  --muted: color-mix(in srgb, var(--imperial) 72%, var(--white));
+  --idle: color-mix(in srgb, var(--imperial) 45%, var(--white));
+  --ok: #0b6e4d;
+  --warn: #8a4f00;
+  --danger: var(--plum);
   --knob: #ffffff;
   --knob-on: #ffffff;
   --sheen: rgba(255, 255, 255, .4);
-  --danger-soft: #f3b5b3;
-  --on-accent: #ffffff;
-  --scrim: rgba(28, 2, 33, .5);
-  --shadow: 0 24px 60px rgba(1, 41, 95, .2);
-  --shadow-sm: 0 10px 30px rgba(1, 41, 95, .16);
+  --danger-soft: color-mix(in srgb, var(--plum) 35%, var(--white));
+  --on-accent: var(--white);
+  --scrim: rgba(1, 41, 95, .45);
+  --shadow: 0 24px 60px rgba(112, 38, 50, .28);
+  --shadow-sm: 0 10px 30px rgba(112, 38, 50, .2);
 }

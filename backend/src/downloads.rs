@@ -380,12 +380,12 @@ fn prompt_async(st: Arc<AppState>, id: String) {
     thread::spawn(move || {
         let Some(item) = st.downloads.get(&id) else { return };
         let text = format!(
-            "SOC Monitor stopped a download.\n\nFile: {}\nFolder: {}\n\n{}\n\nThe file is isolated and cannot run.\n\nYES = Allow it (keep the file)\nNO = Remove it completely",
+            "Omni Guard AOCDS stopped a download.\n\nFile: {}\nFolder: {}\n\n{}\n\nThe file is isolated and cannot run.\n\nYES = Allow it (keep the file)\nNO = Remove it completely",
             item.name,
             Path::new(&item.original_path).parent().map(|p| p.display().to_string()).unwrap_or_default(),
             item.note
         );
-        let title = if item.verdict_name() == "malware" { "SOC Monitor - MALWARE detected" } else { "SOC Monitor - security alert" };
+        let title = if item.verdict_name() == "malware" { "Omni Guard AOCDS - MALWARE detected" } else { "Omni Guard AOCDS - security alert" };
         if let Some(allow) = alert::ask_yes_no(title, &text) {
             let _ = resolve(&st, &id, allow, "popup"); // fails harmlessly if the dashboard answered first
         }

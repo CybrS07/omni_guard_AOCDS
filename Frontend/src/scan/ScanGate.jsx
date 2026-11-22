@@ -102,7 +102,7 @@ function Gate({ children }) {
       {phase === 'boot' && (
         <div className="scan-card center">
           <Radar size={130} />
-          <h1>SOC MONITOR</h1>
+          <h1>OMNI GUARD AOCDS</h1>
           <p className="muted">{bootError ? 'Waiting for the scan service…' : 'Starting security scan…'}</p>
           {bootError && <p className="hint">{bootError} It is started by <code>npm run dev</code>; the first start downloads the face models.</p>}
         </div>

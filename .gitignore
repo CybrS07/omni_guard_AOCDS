@@ -15,5 +15,5 @@ dist-desktop/
 # secrets
 .env
 .env.*
-.env.example
+!.env.example
 backend/scan/api_keys.py

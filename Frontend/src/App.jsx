@@ -7,21 +7,23 @@ import Icon from './components/Icon.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import Downloads from './pages/Downloads.jsx'
 import Firewall from './pages/Firewall.jsx'
+import Scan from './pages/Scan.jsx'
 import Logs from './pages/Logs.jsx'
+import Settings from './pages/Settings.jsx'
 import System from './pages/System.jsx'
-import { useScan } from './scan/ScanGate.jsx'
 import ThemeToggle from './theme/ThemeToggle.jsx'
 
 const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: 'layout' },
   { to: '/firewall', label: 'Firewall', icon: 'shield' },
   { to: '/downloads', label: 'Downloads', icon: 'download' },
+  { to: '/scan', label: 'Scan', icon: 'folder' },
   { to: '/logs', label: 'Logs', icon: 'fileText' },
   { to: '/system', label: 'System', icon: 'box' },
+  { to: '/settings', label: 'Settings', icon: 'server' },
 ]
 
 export default function App() {
-  const scan = useScan()
   const [minShown, setMinShown] = useState(false)
   const { data: status, error, reload } = usePoll('/status', 0)
 
@@ -46,7 +48,7 @@ export default function App() {
         <aside className="sidebar">
           <div className="brand">
             <div className="brand-mark"><Icon name="shield" size={22} /></div>
-            <div><b>Omni Guard AOCDS</b><span>Windows endpoint</span></div>
+            <div><b>Omni Guard AOCDS</b><span>AOCDS endpoint security</span></div>
           </div>
           <nav className="nav">
             {NAV.map((n) => (
@@ -58,18 +60,6 @@ export default function App() {
           </nav>
           <div className="side-foot">
             <ThemeToggle />
-            {scan.user && (
-              <button className="theme-toggle" onClick={scan.lock} aria-label="Lock the app">
-                <Icon name="lock" size={22} />
-                Lock ({scan.user})
-              </button>
-            )}
-            <div className="chip-row">
-              <span className={`pill flat ${status.admin ? 'ok' : 'warn'}`}>{status.admin ? 'Elevated' : 'Not elevated'}</span>
-              {status.demo && <span className="pill flat warn">Demo data</span>}
-            </div>
-            <div>Agent v{status.version}</div>
-            <div className="mono" style={{ wordBreak: 'break-all' }}>{status.log_dir}</div>
           </div>
         </aside>
         <main className="main">
@@ -78,8 +68,10 @@ export default function App() {
             <Route path="/dashboard" element={<Dashboard status={status} />} />
             <Route path="/firewall" element={<Firewall status={status} />} />
             <Route path="/downloads" element={<Downloads />} />
+            <Route path="/scan" element={<Scan />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/system" element={<System />} />
+            <Route path="/settings" element={<Settings status={status} />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </main>

@@ -114,7 +114,7 @@ export default function Dashboard({ status }) {
           <div className="panel-head">
             <h2><Icon name="activity" size={20} /> CPU · Memory · GPU</h2>
             <div className="legend">
-              <span><i style={{ background: 'var(--accent)' }} />CPU</span>
+              <span><i style={{ background: 'var(--chart-1)' }} />CPU</span>
               <span><i style={{ background: 'var(--series-2)' }} />Memory</span>
               {gpu && <span><i style={{ background: 'var(--warn)' }} />GPU</span>}
             </div>
@@ -123,7 +123,7 @@ export default function Dashboard({ status }) {
             max={100}
             fmt={(v) => `${v.toFixed(0)}%`}
             series={[
-              { key: 'cpu', label: 'CPU', color: 'var(--accent)', data: h.map((p) => p.cpu) },
+              { key: 'cpu', label: 'CPU', color: 'var(--chart-1)', data: h.map((p) => p.cpu) },
               { key: 'mem', label: 'Memory', color: 'var(--series-2)', data: h.map((p) => p.mem) },
               ...(gpu ? [{ key: 'gpu', label: 'GPU', color: 'var(--warn)', data: h.map((p) => p.gpu ?? 0) }] : []),
             ]}
@@ -133,14 +133,14 @@ export default function Dashboard({ status }) {
           <div className="panel-head">
             <h2><Icon name="wifi" size={20} /> Network speed</h2>
             <div className="legend">
-              <span><i style={{ background: 'var(--accent)' }} />Down</span>
+              <span><i style={{ background: 'var(--chart-1)' }} />Down</span>
               <span><i style={{ background: 'var(--series-2)' }} />Up</span>
             </div>
           </div>
           <AreaChart
             fmt={fmtBps}
             series={[
-              { key: 'rx', label: 'Down', color: 'var(--accent)', data: h.map((p) => p.rx) },
+              { key: 'rx', label: 'Down', color: 'var(--chart-1)', data: h.map((p) => p.rx) },
               { key: 'tx', label: 'Up', color: 'var(--series-2)', data: h.map((p) => p.tx) },
             ]}
           />

@@ -1,9 +1,9 @@
 {
-  "name": "soc-monitor-desktop",
+  "name": "omni-guard-aocds-desktop",
   "version": "0.2.0",
   "private": true,
-  "description": "SOC Monitor desktop app",
-  "author": "SOC Monitor",
+  "description": "Omni Guard AOCDS desktop app",
+  "author": "Omni Guard AOCDS",
   "main": "main.cjs",
   "scripts": {
     "dev": "electron . --dev",
@@ -15,17 +15,52 @@
     "electron-builder": "^25.1.8"
   },
   "build": {
-    "appId": "com.socmonitor.app",
-    "productName": "SOC Monitor",
-    "directories": { "output": "../dist-desktop" },
-    "files": ["main.cjs", "server.cjs"],
-    "extraResources": [
-      { "from": "../frontend/dist", "to": "ui" },
-      { "from": "../backend/target/release/soc-agent.exe", "to": "agent/soc-agent.exe" },
-      { "from": "../backend/config.json", "to": "agent/config.json" },
-      { "from": "../backend/scan/dist/soc-scan", "to": "scan/soc-scan" }
+    "appId": "com.omniguard.aocds",
+    "productName": "Omni Guard AOCDS",
+    "directories": {
+      "output": "../dist-desktop"
+    },
+    "files": [
+      "main.cjs",
+      "server.cjs"
     ],
-    "win": { "target": ["nsis"], "requestedExecutionLevel": "requireAdministrator" },
-    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "perMachine": true }
+    "extraResources": [
+      {
+        "from": "../frontend/dist",
+        "to": "ui"
+      },
+      {
+        "from": "../backend/target/release/soc-agent.exe",
+        "to": "agent/soc-agent.exe"
+      },
+      {
+        "from": "../backend/config.json",
+        "to": "agent/config.json"
+      },
+      {
+        "from": "../backend/scan/dist/soc-scan",
+        "to": "scan/soc-scan"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "requestedExecutionLevel": "requireAdministrator"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
   }
 }

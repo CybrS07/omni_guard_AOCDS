@@ -29,7 +29,7 @@ pub fn isolate(root: &Path, id: &str, src: &Path) -> Result<PathBuf, String> {
     set_execute_denied(&held, true);
     let _ = fs::write(
         placeholder(src),
-        format!("SOC Monitor is checking \"{name}\".\r\nIt is held in isolation until the check is finished.\r\nThis note disappears when the file is released or removed.\r\n"),
+        format!("Omni Guard AOCDS is checking \"{name}\".\r\nIt is held in isolation until the check is finished.\r\nThis note disappears when the file is released or removed.\r\n"),
     );
     Ok(held)
 }

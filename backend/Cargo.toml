@@ -2,7 +2,7 @@
 name = "soc-agent"
 version = "0.2.0"
 edition = "2021"
-description = "Windows SOC monitoring agent: metrics, firewall, logs, JSON API"
+description = "Omni Guard AOCDS Windows monitoring agent: metrics, firewall, logs, JSON API"
 
 [dependencies]
 axum = "0.7"

@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::Config;
 use crate::downloads::Store as DownloadStore;
+use crate::filescan::Store as FileScanStore;
 use crate::firewall::Firewall;
 use crate::logs::Logger;
 use crate::software::Store as SoftwareStore;
@@ -172,6 +173,7 @@ pub struct AppState {
     pub logger: Logger,
     pub firewall: Firewall,
     pub downloads: DownloadStore,
+    pub filescan: FileScanStore,
     pub software: SoftwareStore,
     cooldowns: Mutex<HashMap<String, Instant>>,
     next_alert_id: Mutex<u64>,
@@ -184,6 +186,7 @@ impl AppState {
             logger: Logger::new(dir),
             firewall: Firewall::new(demo),
             downloads: DownloadStore::new(PathBuf::from(&cfg.data_dir).join("isolation")),
+            filescan: FileScanStore::new(),
             software: SoftwareStore::new(PathBuf::from(&cfg.data_dir)),
             cfg,
             demo,

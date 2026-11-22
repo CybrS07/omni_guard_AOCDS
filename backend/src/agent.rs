@@ -41,7 +41,7 @@ pub async fn run(shutdown: impl Future<Output = ()> + Send + 'static) {
     let token = load_or_create_token(&PathBuf::from(&cfg.data_dir));
     let st = Arc::new(AppState::new(cfg.clone(), demo, admin, token));
 
-    println!("[agent] SOC agent {} starting (admin={admin}, demo={demo})", env!("CARGO_PKG_VERSION"));
+    println!("[agent] Omni Guard AOCDS agent {} starting (admin={admin}, demo={demo})", env!("CARGO_PKG_VERSION"));
     println!("[agent] logs: {}", st.logger.dir().display());
     st.log("access", "INFO", format!("AGENT_STARTED version={} admin={admin} demo={demo}", env!("CARGO_PKG_VERSION")));
     if !admin && !demo {
@@ -52,6 +52,7 @@ pub async fn run(shutdown: impl Future<Output = ()> + Send + 'static) {
     system::spawn(st.clone());
     watchers::spawn(st.clone());
     downloads::spawn(st.clone());
+    crate::filescan::spawn_monitor(st.clone());
     software::spawn(st.clone());
     firewall::spawn_log_watcher(st.clone());
 

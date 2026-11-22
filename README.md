@@ -1,4 +1,4 @@
-# SOC Monitor
+# Omni Guard AOCDS
 
 Two layers, one direction of data:
 
@@ -124,7 +124,47 @@ Turn off with `"software_check": false`. Without an NVD key each program takes ~
 Packaged app: put `.env` next to the exe (or point `SOC_ENV_FILE` at it).
 Options (`watch_dirs`, `download_extensions`, `watch_wsl`, `software_check`, `download_monitor`, `intel_url`) go in `backend/config.json`.
 
+## Scan page (task 4): hidden scripts in images, documents, videos, archives
+
+Open **Scan**, pick a folder (type a path or use *Browse*), press *Scan folder*. Files are only read - never opened or run.
+
+| Step | File | Language |
+|---|---|---|
+| Walk the folder, real file type from the first bytes, data after the end of PNG/JPEG/GIF/BMP/MP4, PNG text chunks, JPEG/GIF comments, programs (MZ/PE) buried in a file, ZIP structure + zip-bomb ratios (central directory only), PDF `/JavaScript` `/Launch`, job + progress | `backend/src/filescan.rs` | Rust |
+| Folder picker + start/status/cancel API (`/api/filescan/*`) | `backend/src/api.rs` | Rust |
+| Decode **pixels** (LSB steganography) and show the hidden script, read script text + base64, peek inside ZIP/Office/JAR with limits, PDF JavaScript, VirusTotal hash lookup | `backend/scan/filescan.py` | Python |
+| Scan page: folder picker, progress, findings, hidden script viewer, Copy / JSON / CSV | `frontend/src/pages/Scan.jsx` | React |
+
+Every finding has a severity (critical 70, high 40, medium 20, low 5 points, capped at 100): 60+ = malicious, 20+ = suspicious.
+If the Python service is not running the Rust checks still work ("analysis by rust-only").
+Limits: 20,000 files, 12 folder levels, images up to 40 megapixels, archive entries read up to 1 MB each (16 MB per archive); symlinks are never followed.
+JPEG pixels are compressed, so for JPEG the structure checks (data after the image, comments) are used instead of pixel decoding.
+
+## Whole-drive scans, download monitor, manual checks, settings
+
+- **Scan page**: pick a folder, or press a drive chip (`C:\`, `D:\` ...) to scan the whole drive. Choose what to check (Pictures, Documents, Video & audio, Archives, Scripts, Programs, or your own extensions) and which folders to skip. Choices are remembered.
+- **Download monitor** (`filescan::spawn_monitor` in `backend/src/filescan.rs`, Rust service thread): every NEW file of any type that lands in the watched folders is checked for zip bombs, data hidden after images/videos, hidden pixel data, scripts and disguised programs. The Python part (`backend/scan/filescan.py`) decodes what is hidden and the Scan page shows it. Switch off with `"scan_download_files": false` in `config.json`.
+- **Downloads page > Check services**: look up a SHA-256 (or hash a file in the browser) on VirusTotal, or an application name + version on the NVD, any time. "No record found" is shown when the NVD has nothing.
+- **Settings page**: agent info, watched folders, face-match level, API keys, theme.
+- **Face scan** needs a 95% match (change with `FACE_MATCH_PERCENT` in `.env`).
+- **Secrets** live only in `.env` (git-ignored). Installed app: `C:\ProgramData\SocMonitor\.env` (kept across updates).
+
+## CI/CD: every push becomes an app update
+
+`.github/workflows/ci.yml` tests every branch/PR. `.github/workflows/release.yml` runs on every push to `main`:
+tests -> builds dashboard, Rust agent, Python scan service -> builds the Windows installer -> publishes a GitHub Release.
+Installed copies check GitHub Releases on start and every 4 hours (`electron-updater` in `desktop/main.cjs`), download the new version and ask to restart.
+
+One-time setup:
+1. Create a GitHub repository and push this folder to `main` (`.env` is ignored, so no keys are uploaded).
+2. Repository > Settings > Actions > General > Workflow permissions > **Read and write permissions**.
+3. Install the first build from the Release page once. After that, every push to `main` updates installed apps by itself.
+
+Version = `major.minor` from `desktop/package.json` + the workflow run number (e.g. `0.2.17`). Bump the minor in `desktop/package.json` for bigger releases.
+The repository must be public for the updater to read releases without a token (private repos need extra setup). The installer is not code-signed, so Windows SmartScreen may warn until you add a signing certificate.
+
 ## Theme
 
-Colours exist only in `frontend/src/theme/theme.css`. Dark = Midnight Violet `#1C0221` / Brick Ember `#B80C09` / Coral Glow `#FF7F51` / Wine Plum `#702632`;
-Light = White `#FFFFFF` / Imperial Blue `#01295F` / Wine Plum / Coral Glow.
+Colours exist only in `frontend/src/theme/theme.css`.
+Dark = Midnight Violet `#1C0221` + Brick Ember `#B80C09` + White `#FFFFFF`.
+Light = Coral Glow `#FF7F51` + Imperial Blue `#01295F` + Wine Plum `#702632`.
