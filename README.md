@@ -7,6 +7,20 @@ Two layers, one direction of data:
                   collects everything          one /api/snapshot for AI              reads the API only
 ```
 
+## Documentation map
+
+| Read this | To learn |
+|---|---|
+| `ARCHITECTURE.md` | The whole picture: folder map, who talks to whom, start-up workflow, walk-throughs of each feature |
+| `docs/FILE-INTERACTIONS.md` | Generated table of which `.rs`, `.py`, `.js`, `.jsx` file uses which, and every API route with the screen that calls it |
+| `backend/README.md` | The two back-end programs (Rust agent and Python service) and how they cooperate |
+| `backend/src/README.md` | Every Rust file, its job, its data files, how to test it |
+| `backend/scan/README.md` | Every Python file, the endpoints, the `.env` keys, the local AI model |
+| `frontend/README.md`, `frontend/src/README.md` | The dashboard, how it reaches the back-ends, one README per sub-folder (`pages`, `components`, `components/settings`, `scan`, `theme`) |
+| `desktop/README.md` | The Electron wrapper that turns everything into one Windows app |
+| `scripts/README.md` | Windows service install/uninstall/package scripts |
+| `.github/README.md` | CI and the automatic release / self-update pipeline |
+
 ## 1. The Rust service package  (`backend/`)
 
 `soc-agent` collects, on a loop, and exposes it all as JSON:
@@ -162,6 +176,37 @@ One-time setup:
 
 Version = `major.minor` from `desktop/package.json` + the workflow run number (e.g. `0.2.17`). Bump the minor in `desktop/package.json` for bigger releases.
 The repository must be public for the updater to read releases without a token (private repos need extra setup). The installer is not code-signed, so Windows SmartScreen may warn until you add a signing certificate.
+
+## New in this version
+
+- **Sign-in**: password first; the face scan is the second option (Settings > Sign-in: face scan to require it, set the match level 80-100% with the slider).
+- **Settings** (one page): setup checklist, services (stop/start each background service and choose which start with the app), watched folders (add/remove), file integrity guard (`backend/src/integrity.rs`), accounts (add, change password, remove), face level, API keys, theme.
+- **Traffic watch** (Firewall page, `backend/src/netwatch.rs`): every address the PC talks to, in and out. Each address is compared with its own usual rate; a sudden jump, a backdoor port or several signs together are marked **watch** / **danger** and raise an alert.
+- **Scan > Scan this PC**: installed programs checked against the NVD (vulnerabilities and available patches) plus a sweep of user folders for hidden scripts / known malware.
+- **Downloads > Check services**: file hash on VirusTotal, application name + version on the NVD, and a link/domain check (age, registrar, TLS certificate, subdomains from the certificate).
+- **Local AI** (`backend/scan/aimodel.py`, `train_ai.py`): a tiny neural network classifies scripts (benign, downloader, obfuscated, backdoor, persistence, evasion). Weights are stored as int8 (`models/script_clf_int8.npz`, about 0.3 MB), run with plain numpy, nothing leaves the PC. It was trained on generated sample scripts, so treat it as a second opinion next to the rules; retrain with your own samples using `train_ai.py`.
+- See `ARCHITECTURE.md` for how every .rs, .py, .js and .jsx file connects.
+- **Firewall > Clear app rules** removes every rule this app created.
+- NVD notice: "This product uses the NVD API but is not endorsed or certified by the NVD." NVD text is shown exactly as published.
+
+## Making the Windows app (exe) and keeping it tied to Git
+
+The desktop app (`desktop/`, Electron) opens the dashboard in its own window and starts the Rust agent and the Python scan service itself, so one icon runs everything.
+
+Build it once by hand (Windows, with Node 22, Rust, uv and Git installed):
+```
+npm run setup            # installs everything
+npm run desktop:setup    # installs Electron
+npm run desktop:build    # dashboard + agent + scan service + installer
+```
+The installer appears in `dist-desktop/` (`Omni Guard AOCDS Setup x.y.z.exe`). Run it; the app starts the agent and the scan service in the background and shows the full dashboard.
+
+Keep it tied to Git (no more manual rebuilds):
+1. `git init`, commit, create a GitHub repository, `git remote add origin <url>`, `git push -u origin main`.
+2. GitHub > Settings > Actions > General > Workflow permissions: **Read and write**.
+3. From now on every `git push` to `main` runs `.github/workflows/release.yml`, which builds the installer and publishes a Release. Installed apps check Releases at start and every 4 hours and update themselves.
+
+Your keys stay out of git (`.env` is ignored); in the installed app they live in `C:\ProgramData\SocMonitor\.env`.
 
 ## Theme
 

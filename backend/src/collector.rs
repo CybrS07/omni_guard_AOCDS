@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use sysinfo::{Components, Disks, Networks, System};
 
 #[derive(Clone)]
-struct RawConn {
+pub struct RawConn {
     proto: String,
     local_ip: String,
     local_port: u16,
@@ -460,6 +460,8 @@ fn analyse_connections(st: &AppState, conns: &[RawConn], pid_name: &HashMap<u32,
     let mut established: Vec<Connection> = Vec::new();
     let mut listening: Vec<Connection> = Vec::new();
     let mut by_ip: HashMap<String, RemoteIp> = HashMap::new();
+    let listen_ports: HashSet<u16> = conns.iter().filter(|c| c.state.to_uppercase().starts_with("LISTEN")).map(|c| c.local_port).collect();
+    let mut watched: Vec<(String, u16, u16, String, bool, bool, bool)> = Vec::new();
 
     for c in conns {
         let is_listen = c.state.to_uppercase().starts_with("LISTEN");
@@ -523,6 +525,11 @@ fn analyse_connections(st: &AppState, conns: &[RawConn], pid_name: &HashMap<u32,
             );
         }
 
+        if !c.remote_ip.is_empty() && c.remote_ip != "127.0.0.1" && c.remote_ip != "::1" && c.remote_ip != "0.0.0.0" {
+            let inbound = listen_ports.contains(&c.local_port);
+            let backdoor = remote_public && (if inbound { sus.contains(&c.local_port) } else { sus.contains(&c.remote_port) });
+            watched.push((c.remote_ip.clone(), c.local_port, c.remote_port, process.clone(), inbound, remote_public, backdoor));
+        }
         let e = by_ip.entry(c.remote_ip.clone()).or_insert_with(|| RemoteIp {
             ip: c.remote_ip.clone(),
             is_private: is_local_ip(&c.remote_ip),
@@ -546,6 +553,9 @@ fn analyse_connections(st: &AppState, conns: &[RawConn], pid_name: &HashMap<u32,
             flagged,
         });
     }
+
+    let seen: Vec<crate::netwatch::Seen> = watched.iter().map(|w| crate::netwatch::Seen { remote_ip: &w.0, local_port: w.1, remote_port: w.2, process: &w.3, inbound: w.4, public: w.5, backdoor: w.6 }).collect();
+    crate::netwatch::observe(st, &seen);
 
     let mut remote_ips: Vec<RemoteIp> = by_ip.into_values().filter(|r| !r.ip.is_empty()).collect();
     for r in &remote_ips {

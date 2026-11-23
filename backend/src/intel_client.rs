@@ -33,6 +33,17 @@ pub fn post_json(base: &str, path: &str, body: &Value) -> Result<Value, String> 
     serde_json::from_str(body).map_err(|e| format!("unreadable reply: {e}"))
 }
 
+/// Is the Python service answering? (GET `path`, true on HTTP 200)
+pub fn get_ok(base: &str, path: &str) -> bool {
+    let Some(hostport) = base.strip_prefix("http://").map(|h| h.trim_end_matches('/')) else { return false };
+    let Some(addr) = hostport.to_socket_addrs().ok().and_then(|mut a| a.next()) else { return false };
+    let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(800)) else { return false };
+    s.set_read_timeout(Some(Duration::from_secs(2))).ok();
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {hostport}\r\nConnection: close\r\n\r\n");
+    let mut head = [0u8; 16];
+    s.write_all(req.as_bytes()).is_ok() && s.read(&mut head).map(|n| n >= 12 && head[..n].starts_with(b"HTTP/1.1 200")).unwrap_or(false)
+}
+
 /// Returns the full verdict object (verdict, summary, vt, cves, ...).
 pub fn analyze(base: &str, f: &FileInfo) -> Result<Value, String> {
     post_json(

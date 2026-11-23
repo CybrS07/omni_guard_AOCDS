@@ -240,7 +240,7 @@ def nvd_cves(vendor: str, prod: str, version: str, key: str) -> list:
                             fixed.append(m["versionEndExcluding"])
         patch_ref = any("Patch" in (r.get("tags") or []) for r in c.get("references", []))
         desc = next((d["value"] for d in c.get("descriptions", []) if d.get("lang") == "en"), "")
-        found.append({"id": c.get("id", ""), "score": score, "severity": sev, "summary": desc[:300],
+        found.append({"id": c.get("id", ""), "score": score, "severity": sev, "summary": desc,  # NVD text exactly as published (never shortened or reworded)
                       "patch_available": bool(fixed) or patch_ref, "fixed_in": min(fixed, key=_vtuple) if fixed else ""})
     return sorted(found, key=lambda x: -x["score"])
 

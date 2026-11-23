@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import Button from './Button.jsx'
 
 export function Radar({ size = 120 }) {
@@ -19,19 +20,50 @@ export function Bars() {
   )
 }
 
+/** A shield that breathes while three dots bounce under it (the load screen has no scanner on purpose). */
+export function ShieldPulse({ size = 120 }) {
+  return (
+    <div className="shield-pulse" style={{ '--size': `${size}px` }} role="status" aria-label="Loading">
+      <svg viewBox="0 0 64 64" width={size} height={size} aria-hidden="true">
+        <path d="M32 4 52 12v16c0 14-8.6 25.2-20 30C20.600 53.200 12 42 12 28V12z" />
+        <path className="tick" d="m22 31 7 7 13-14" />
+      </svg>
+      <div className="hop"><i /><i /><i /></div>
+    </div>
+  )
+}
+
+const QUIPS = [
+  'Waking up the guard dogs…',
+  'Teaching the firewall some manners…',
+  'Counting open ports (there are always more)…',
+  'Polishing the shield, one pixel at a time…',
+  'Asking the packets where they are going…',
+  'Brewing a strong cup of cyber-coffee…',
+  'Checking under the bed for hidden scripts…',
+  'Convincing the logs to speak up…',
+  'Hiding the snacks from the zip bombs…',
+  'Almost there. The suspense is the best part…',
+]
+
+/** Rotates through the lines so the wait is a bit less boring. */
+export function Quips({ every = 1700 }) {
+  const [i, setI] = useState(() => Math.floor(Math.random() * QUIPS.length))
+  useEffect(() => {
+    const t = setInterval(() => setI((n) => (n + 1) % QUIPS.length), every)
+    return () => clearInterval(t)
+  }, [every])
+  return <div className="quip" key={i} aria-live="polite">{QUIPS[i]}</div>
+}
+
 /** Full-screen loader shown until the agent answers. */
 export function BootScreen({ error, onRetry }) {
   return (
     <div className="boot">
       <div className="boot-card">
-        <Radar size={150} />
+        <ShieldPulse size={120} />
         <h1>OMNI GUARD AOCDS</h1>
-        <div className="boot-steps">
-          <div>&gt; starting collectors…</div>
-          <div>&gt; reading firewall policy…</div>
-          <div>&gt; opening log streams…</div>
-          <div>&gt; connecting to agent…</div>
-        </div>
+        <Quips />
         {error && (
           <div className="boot-error">
             <b>Agent not reachable.</b>

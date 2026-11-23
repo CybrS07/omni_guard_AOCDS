@@ -318,6 +318,25 @@ New-NetFirewallRule @a | Out-Null
         Ok(())
     }
 
+    /// Remove EVERY rule this app created (SOC- prefix): blocked IPs, blocked domains, stopped ports.
+    /// Rules that Windows or other programs own are never touched. Returns how many were removed.
+    pub fn clear_managed(&self) -> Result<usize, String> {
+        if self.demo {
+            let mut r = self.rules.write().unwrap_or_else(|e| e.into_inner());
+            let n = r.iter().filter(|x| x.name.starts_with(MANAGED_PREFIX)).count();
+            r.retain(|x| !x.name.starts_with(MANAGED_PREFIX));
+            return Ok(n);
+        }
+        let script = "$ErrorActionPreference='Stop';try{$r=@(Get-NetFirewallRule -Name 'SOC-*' -ErrorAction SilentlyContinue);$n=$r.Count;if($n -gt 0){$r|Remove-NetFirewallRule};Write-Output $n}catch{Write-Output $_.Exception.Message;exit 1}";
+        let out = powershell(script, &[], 120).ok_or("PowerShell timed out")?;
+        if !out.ok {
+            return Err(format!("Windows refused: {}", out.stdout.trim()));
+        }
+        let n = out.stdout.trim().parse::<usize>().unwrap_or(0);
+        self.rules.write().unwrap_or_else(|e| e.into_inner()).retain(|r| !r.name.starts_with(MANAGED_PREFIX));
+        Ok(n)
+    }
+
     /// Block one address (or CIDR) in both directions.
     pub fn block_ip(&self, ip: &str) -> Result<Vec<Rule>, String> {
         let ip = ip.trim();

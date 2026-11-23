@@ -13,6 +13,7 @@ from pydantic import BaseModel
 import scan
 from intel import router as intel_router
 from filescan import router as filescan_router
+from domaincheck import router as domain_router
 
 app = FastAPI(title="Omni Guard AOCDS Scan API")
 # only the local dashboard may call this from a browser
@@ -21,12 +22,13 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5173", "http
 
 
 app.include_router(filescan_router)  # hidden scripts in images / documents / archives
+app.include_router(domain_router)
 app.include_router(intel_router)   # VirusTotal + NVD lookups for the downloads watcher
 
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "face_match_percent": scan.THRESHOLD}
+    return {"ok": True, "face_match_percent": scan.THRESHOLD, "face_required": scan.face_required()}
 
 
 class Sample(BaseModel):
@@ -43,14 +45,14 @@ class EnrollIn(BaseModel):
 class LoginIn(BaseModel):
     username: str
     password: str
-    images: list[str]
+    images: list[str] = []
 
 
 class AddUserIn(BaseModel):
     username: str
     password: str
     role: str = "user"
-    samples: list[Sample]
+    samples: list[Sample] = []
 
 
 class PasswordIn(BaseModel):
@@ -118,6 +120,24 @@ def users_password(b: PasswordIn, x_token: str = Header(default="")):
 @app.post("/api/users/delete")
 def users_delete(b: DeleteIn, x_token: str = Header(default="")):
     return _authed(scan.delete_user(x_token, b.username))
+
+
+class ThresholdIn(BaseModel):
+    percent: float
+
+
+@app.post("/api/face/threshold")
+def face_threshold(b: ThresholdIn, x_token: str = Header(default="")):
+    return _authed(scan.set_threshold(x_token, b.percent))
+
+
+class RequiredIn(BaseModel):
+    required: bool
+
+
+@app.post("/api/face/required")
+def face_req(b: RequiredIn, x_token: str = Header(default="")):
+    return _authed(scan.set_face_required(x_token, b.required))
 
 
 @app.get("/api/logs")

@@ -129,7 +129,7 @@ def _session(user: str, role: str, score: float) -> dict:
 # ---------------- API-facing functions ----------------
 def status() -> dict:
     users = sorted(_db()["users"])
-    return {"enrolled": bool(users), "users": users}
+    return {"enrolled": bool(users), "users": users, "face_required": face_required()}
 
 
 def detect(image: str) -> dict:
@@ -145,7 +145,29 @@ def _auth(token: str) -> dict | None:
     return s if s and s["user"] in _db()["users"] else None
 
 
-def _create(username: str, password: str, samples: list[dict], role: str) -> dict:
+def face_required() -> bool:
+    """Face scan is the SECOND option by default. Turn FACE_REQUIRED=true on in Settings to demand it at every sign-in."""
+    try:
+        import intel
+        raw = os.environ.get("FACE_REQUIRED") or intel._dotenv().get("FACE_REQUIRED") or "false"
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    except Exception:
+        return False
+
+
+def set_face_required(token: str, required: bool) -> dict | None:
+    s = _auth(token)
+    if not s:
+        return None
+    if s["role"] != "admin":
+        return _result(False, "forbidden", "Admin only")
+    import intel
+    intel._set_env("FACE_REQUIRED", "true" if required else "false")
+    log.info("FACE_REQUIRED | by=%s value=%s", s["user"], required)
+    return _result(True, "ok", "Face scan is now required at sign-in" if required else "Face scan is now optional (password is enough)", required=bool(required))
+
+
+def _create(username: str, password: str, samples: list[dict], role: str, face_optional: bool = False) -> dict:
     name = username.strip().lower()
     if not re.fullmatch(r"[a-z0-9_-]{2,32}", name):
         return _result(False, "bad_name", "Name: 2-32 letters, numbers, - or _")
@@ -173,7 +195,7 @@ def _create(username: str, password: str, samples: list[dict], role: str) -> dic
         for v in model.variations(frame, face, pose):
             v["image"] = str(img.relative_to(DATA))
             variations.append(v)
-    if len(variations) < MIN_VARIATIONS:
+    if len(variations) < MIN_VARIATIONS and not (face_optional and not samples):
         shutil.rmtree(folder, ignore_errors=True)
         return _result(False, "few_samples", "Not enough clear face captures, try again")
 
@@ -205,7 +227,7 @@ def add_user(token: str, username: str, password: str, role: str, samples: list[
         return None
     if s["role"] != "admin":
         return _result(False, "forbidden", "Admin only")
-    r = _create(username, password, samples, role)
+    r = _create(username, password, samples, role, face_optional=True)
     if r["ok"]:
         log.info("USER_ADD | by=%s user=%s role=%s", s["user"], username.strip().lower(), role)
     return r
@@ -233,7 +255,16 @@ def login(username: str, password: str, images: list[str]) -> dict:
         log.warning("FAIL | user=%s reason=wrong_password", name)
         return _result(False, "bad_password", "Wrong password")
 
+    if not images:                                   # password only (face scan is the optional second step)
+        if face_required():
+            return _result(False, "face_required", "Face scan is required: use the camera option to sign in")
+        _fails.pop(name, None)
+        log.info("OK | user=%s role=%s method=password", name, user["role"])
+        return _result(True, "ok", "Access granted", session=_session(name, user["role"], 0.0))
+
     known = [v["embedding"] for v in user["variations"]]
+    if not known:
+        return _result(False, "no_face_profile", "This account has no face profile yet: sign in with the password only")
     best, last_frame = None, None
     for img in images[:5]:
         frame = model.decode(img)
@@ -271,6 +302,22 @@ def recent_logs(token: str, n: int = 12) -> list[str] | None:
 
 
 # ---------------- user management (Settings) ----------------
+def set_threshold(token: str, percent: float) -> dict | None:
+    """Admin only: change the face match % needed to sign in (80-100). Saved in .env so it survives a restart."""
+    global THRESHOLD
+    s = _auth(token)
+    if not s:
+        return None
+    if s["role"] != "admin":
+        return _result(False, "forbidden", "Admin only")
+    percent = round(max(80.0, min(100.0, float(percent))), 1)
+    import intel
+    intel._set_env("FACE_MATCH_PERCENT", str(percent))
+    THRESHOLD = percent
+    log.info("FACE_THRESHOLD | by=%s value=%s", s["user"], percent)
+    return _result(True, "ok", f"Face match level is now {percent}%", percent=percent)
+
+
 def list_users(token: str) -> list[dict] | None:
     s = _auth(token)
     if not s:

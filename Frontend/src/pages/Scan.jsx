@@ -7,6 +7,7 @@ import { useToast } from '../components/Feedback.jsx'
 import Icon from '../components/Icon.jsx'
 import { clock } from '../format.js'
 import { copyText } from '../export.js'
+import SoftwarePanel from '../components/SoftwarePanel.jsx'
 
 const TONE = { clean: 'ok', suspicious: 'high', malicious: 'critical' }
 const SEV = { critical: 'critical', high: 'high', medium: 'medium', low: 'low' }
@@ -21,6 +22,7 @@ const TYPES = {
   Scripts: 'ps1 psm1 bat cmd vbs vbe js jse sh bash py wsf php pl',
   Programs: 'exe dll msi scr com lnk sys',
 }
+const PC_TYPES = 'exe dll msi scr com lnk bat cmd ps1 psm1 vbs vbe js jse hta wsf jar sh bash zip 7z rar doc docm docx xls xlsm xlsx ppt pptm pdf png bmp gif webp'.split(' ')
 const SYSTEM_DIRS = ['Windows', 'Program Files', 'Program Files (x86)', 'ProgramData']
 const PREF = 'omniguard-scan-options'
 const loadPref = () => {
@@ -107,6 +109,22 @@ export default function Scan() {
     }
   }
 
+  // "Scan this PC": installed apps (vulnerabilities + patches) AND the files where programs and scripts live
+  const [pcBusy, setPcBusy] = useState(false)
+  const scanPc = async () => {
+    setPcBusy(true)
+    try {
+      await api('/software/rescan', { method: 'POST' })
+      await api('/filescan/start', { method: 'POST', body: { path: '@pc', recursive: true, extensions: PC_TYPES, exclude: ['node_modules', '.git', 'WinSxS'] } })
+      setOpen(null)
+      await poll()
+    } catch (e) {
+      toast(e.message, 'err')
+    } finally {
+      setPcBusy(false)
+    }
+  }
+
   const stop = async () => {
     try {
       await api('/filescan/cancel', { method: 'POST', body: { id: job.id } })
@@ -130,7 +148,18 @@ export default function Scan() {
       </div>
 
       <div className="panel" style={{ marginBottom: 16 }}>
-        <div className="panel-head"><h2><Icon name="folder" size={20} /> Folder to scan</h2></div>
+        <div className="panel-head">
+          <h2><Icon name="shield" size={20} /> Scan this PC</h2>
+          <Button variant="primary" icon="shield" busy={pcBusy} disabled={running} onClick={scanPc}>Scan this PC</Button>
+        </div>
+        <p className="hint" style={{ margin: 0 }}>
+          One click checks the whole system: every installed program against the NVD for known vulnerabilities and available patches, and the programs, scripts, archives, documents and pictures in all user profiles, ProgramData and the Windows temp folder for hidden scripts, hidden pixel data, zip bombs and known malware (VirusTotal hash lookup).
+          It can take a while; you can keep using the app.
+        </p>
+      </div>
+
+      <div className="panel" style={{ marginBottom: 16 }}>
+        <div className="panel-head"><h2><Icon name="folder" size={20} /> Or pick a folder or drive</h2></div>
         <div className="toolbar" style={{ marginBottom: 10 }}>
           <input
             className="input" style={{ flex: 1, minWidth: 240 }} placeholder="C:\Users\you\Downloads" aria-label="Folder path"
@@ -255,6 +284,7 @@ export default function Scan() {
           </div>
         </div>
       )}
+      <SoftwarePanel />
       <Monitor />
     </>
   )

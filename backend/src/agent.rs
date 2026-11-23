@@ -39,6 +39,7 @@ pub async fn run(shutdown: impl Future<Output = ()> + Send + 'static) {
     let demo = !cfg!(windows);
     let admin = util::detect_admin();
     let token = load_or_create_token(&PathBuf::from(&cfg.data_dir));
+    crate::settings::init(&cfg);
     let st = Arc::new(AppState::new(cfg.clone(), demo, admin, token));
 
     println!("[agent] Omni Guard AOCDS agent {} starting (admin={admin}, demo={demo})", env!("CARGO_PKG_VERSION"));
@@ -54,6 +55,7 @@ pub async fn run(shutdown: impl Future<Output = ()> + Send + 'static) {
     downloads::spawn(st.clone());
     crate::filescan::spawn_monitor(st.clone());
     software::spawn(st.clone());
+    crate::integrity::spawn(st.clone());
     firewall::spawn_log_watcher(st.clone());
 
     // Reading Windows firewall rules is slow; do it off the main path, then keep it fresh.

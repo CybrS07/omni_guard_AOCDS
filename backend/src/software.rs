@@ -144,23 +144,23 @@ fn enumerate(demo: bool) -> Vec<Software> {
 // ------------------------------------------------------------------ the loop
 
 pub fn spawn(st: Arc<AppState>) {
-    if !st.cfg.software_check {
-        st.log("apps", "INFO", "SOFTWARE_CHECK disabled in config.json");
-        return;
-    }
     thread::Builder::new().name("software".into()).spawn(move || run(st)).expect("spawn software checker");
 }
 
 fn run(st: Arc<AppState>) {
-    thread::sleep(Duration::from_secs(8)); // let the Python service finish starting
+    // Runs when the service is on (every 30 minutes) or when "Scan now" / "Scan this PC" asks for it.
+    let mut waited: u64 = ROUND_EVERY_SECS - 8; // first automatic round ~8 s after start (the Python service must be up)
     loop {
-        round(&st);
-        // sleep until the next round, but wake early on "Scan now"
-        for _ in 0..ROUND_EVERY_SECS {
-            if st.software.rescan.swap(false, Ordering::SeqCst) {
-                break;
-            }
-            thread::sleep(Duration::from_secs(1));
+        thread::sleep(Duration::from_secs(1));
+        let asked = st.software.rescan.swap(false, Ordering::SeqCst);
+        let due = crate::settings::enabled("software") && {
+            waited += 1;
+            waited >= ROUND_EVERY_SECS
+        };
+        if asked || due {
+            waited = 0;
+            round(&st);
+            crate::settings::beat("software");
         }
     }
 }

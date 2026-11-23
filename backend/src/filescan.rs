@@ -528,16 +528,17 @@ fn zip_scan(f: &mut File, total: u64, ext: &str) -> (Vec<Finding>, Option<Value>
     if e + 22 > tail.len() {
         return (out, None);
     }
-    let (mut entries, mut cd_size, mut cd_off) = (u16le(&tail[e + 10..]), u32le(&tail[e + 12..]), u32le(&tail[e + 16..]));
+    let (entries, mut cd_size, mut cd_off) = (u16le(&tail[e + 10..]), u32le(&tail[e + 12..]), u32le(&tail[e + 16..]));
     if (entries == 0xffff || cd_off == 0xffff_ffff || cd_size == 0xffff_ffff) && e >= 20 && &tail[e - 20..e - 16] == b"PK\x06\x07" {
         let z64 = u64le(&tail[e - 12..]);
         let mut rec = [0u8; 56];
         if f.seek(SeekFrom::Start(z64)).is_ok() && f.read_exact(&mut rec).is_ok() && &rec[..4] == b"PK\x06\x06" {
-            entries = u64le(&rec[32..]);
+            let _ = u64le(&rec[32..]); // 64-bit entry count: the real count comes from walking the directory
             cd_size = u64le(&rec[40..]);
             cd_off = u64le(&rec[48..]);
         }
     }
+    let _ = entries; // (kept for reading the 64-bit record; the entry count itself comes from walking the directory)
     if cd_size > 256 * 1024 * 1024 || cd_off.saturating_add(cd_size) > total {
         out.push(finding("zip-bad-dir", "high", "Archive directory is invalid", "The central directory points outside the file. The file is corrupt or built to crash unpackers."));
         return (out, None);
@@ -967,17 +968,21 @@ fn collect(root: &Path, o: &Opts, cancel: &AtomicBool) -> (Vec<PathBuf>, bool) {
 }
 
 pub fn start(st: &Shared, path: &str, opts: Opts) -> Result<String, String> {
-    let root = PathBuf::from(path.trim());
-    if !root.is_dir() {
+    // "@pc" = the places where programs and scripts live on this PC (all user profiles, ProgramData, temp folders)
+    let roots: Vec<PathBuf> = if path.trim() == "@pc" { pc_roots() } else { vec![PathBuf::from(path.trim())] };
+    let roots: Vec<PathBuf> = roots.into_iter().filter(|r| r.is_dir()).collect();
+    if roots.is_empty() {
         return Err("that folder does not exist".into());
     }
+    let root = roots[0].clone();
+    let shown = if path.trim() == "@pc" { format!("This PC ({})", roots.iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", ")) } else { root.display().to_string() };
     if st.filescan.running() {
         return Err("a scan is already running - wait for it to finish or stop it".into());
     }
     let id = format!("{:x}", rand::random::<u32>());
     let cell = Arc::new(Cell {
         job: Mutex::new(Job {
-            id: id.clone(), path: root.display().to_string(), status: "running".into(), started: crate::util::now_iso(), finished: String::new(),
+            id: id.clone(), path: shown.clone(), status: "running".into(), started: crate::util::now_iso(), finished: String::new(),
             total: 0, scanned: 0, current: "listing files".into(), clean: 0, suspicious: 0, malicious: 0, skipped: 0, truncated: false, error: String::new(), items: vec![],
         }),
         cancel: AtomicBool::new(false),
@@ -989,7 +994,8 @@ pub fn start(st: &Shared, path: &str, opts: Opts) -> Result<String, String> {
             jobs.remove(0);
         }
     }
-    st.log("apps", "INFO", format!("FILE_SCAN started job={id} folder={} types={} excluded={}", root.display(), if opts.extensions.is_empty() { "all".to_string() } else { opts.extensions.join(",") }, opts.exclude.len()));
+    st.log("apps", "INFO", format!("FILE_SCAN started job={id} folder={shown} types={} excluded={}", if opts.extensions.is_empty() { "all".to_string() } else { opts.extensions.join(",") }, opts.exclude.len()));
+    let root = roots;
     let s = st.clone();
     std::thread::Builder::new()
         .name("file-scan".into())
@@ -998,8 +1004,33 @@ pub fn start(st: &Shared, path: &str, opts: Opts) -> Result<String, String> {
     Ok(id)
 }
 
-fn run_job(st: Shared, cell: Arc<Cell>, root: PathBuf, opts: Opts) {
-    let (files, truncated) = collect(&root, &opts, &cell.cancel);
+fn pc_roots() -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = Vec::new();
+    if cfg!(windows) {
+        let sys = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        for p in [format!("{sys}\\Users"), std::env::var("ProgramData").unwrap_or_else(|_| format!("{sys}\\ProgramData")), format!("{sys}\\Windows\\Temp")] {
+            v.push(PathBuf::from(p));
+        }
+    } else if let Some(h) = std::env::var_os("HOME") {
+        v.push(PathBuf::from(h));
+        v.push(PathBuf::from("/tmp"));
+    }
+    v
+}
+
+fn run_job(st: Shared, cell: Arc<Cell>, roots: Vec<PathBuf>, opts: Opts) {
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut truncated = false;
+    for r in &roots {
+        let (mut f, t) = collect(r, &opts, &cell.cancel);
+        files.append(&mut f);
+        truncated |= t;
+        if files.len() >= MAX_FILES {
+            truncated = true;
+            files.truncate(MAX_FILES);
+            break;
+        }
+    }
     {
         let mut j = cell.job.lock().unwrap_or_else(|e| e.into_inner());
         j.total = files.len();
@@ -1072,7 +1103,7 @@ fn home_dirs() -> Vec<(String, PathBuf)> {
 }
 
 /// Sub-folders of `path` (or the drives / filesystem root when `path` is empty) for the folder picker.
-pub fn browse(path: &str) -> Result<Value, String> {
+pub fn browse(path: &str, with_files: bool) -> Result<Value, String> {
     let shortcuts: Vec<Value> = home_dirs().into_iter().map(|(n, p)| json!({ "name": n, "path": p.display().to_string() })).collect();
     let path = path.trim();
     if path.is_empty() {
@@ -1081,13 +1112,14 @@ pub fn browse(path: &str) -> Result<Value, String> {
         } else {
             vec![json!({ "name": "/", "path": "/" })]
         };
-        return Ok(json!({ "path": "", "parent": null, "dirs": roots, "files": 0, "shortcuts": shortcuts }));
+        return Ok(json!({ "path": "", "parent": null, "dirs": roots, "files": 0, "shortcuts": shortcuts, "file_list": [] }));
     }
     let p = PathBuf::from(path);
     if !p.is_dir() {
         return Err("not a folder".into());
     }
     let mut dirs = Vec::new();
+    let mut file_list: Vec<Value> = Vec::new();
     let mut files = 0usize;
     for e in std::fs::read_dir(&p).map_err(|e| e.to_string())?.flatten() {
         let Ok(ft) = e.file_type() else { continue };
@@ -1095,6 +1127,9 @@ pub fn browse(path: &str) -> Result<Value, String> {
             dirs.push((e.file_name().to_string_lossy().into_owned(), e.path()));
         } else if ft.is_file() {
             files += 1;
+            if with_files && file_list.len() < 400 {
+                file_list.push(json!({ "name": e.file_name().to_string_lossy(), "path": e.path().display().to_string() }));
+            }
         }
     }
     dirs.sort_by_key(|d| d.0.to_lowercase());
@@ -1104,7 +1139,7 @@ pub fn browse(path: &str) -> Result<Value, String> {
         _ => String::new(), // at a root: "up" goes back to the drive list
     };
     Ok(json!({
-        "path": p.display().to_string(), "parent": parent, "files": files, "shortcuts": shortcuts,
+        "path": p.display().to_string(), "parent": parent, "files": files, "shortcuts": shortcuts, "file_list": file_list,
         "dirs": dirs.into_iter().map(|(n, p)| json!({ "name": n, "path": p.display().to_string() })).collect::<Vec<_>>(),
     }))
 }
@@ -1117,10 +1152,6 @@ const MONITOR_KEEP: usize = 200;
 /// Background service: every NEW file that appears in the watched folders (Downloads + Desktop by default) - picture,
 /// document, video, archive, script, anything - is run through the same Rust + Python checks as the Scan page.
 pub fn spawn_monitor(st: Shared) {
-    if !st.cfg.download_monitor || !st.cfg.scan_download_files {
-        st.log("apps", "INFO", "DOWNLOAD_FILE_SCAN disabled in config.json");
-        return;
-    }
     std::thread::Builder::new()
         .name("download-file-scan".into())
         .spawn(move || monitor_loop(st))
@@ -1134,6 +1165,11 @@ fn monitor_loop(st: Shared) {
     let mut first = true;
     let mut py_fail = 0u8;
     loop {
+        if !crate::settings::enabled("filescan") {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            continue;
+        }
+        crate::settings::beat("filescan");
         for dir in crate::downloads::watch_dirs(&st.cfg) {
             let Ok(rd) = std::fs::read_dir(&dir) else { continue };
             for e in rd.flatten() {

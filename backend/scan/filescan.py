@@ -28,6 +28,7 @@ from typing import Any, Optional
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+import aimodel
 import intel
 
 router = APIRouter(prefix="/api/filescan")
@@ -78,7 +79,7 @@ RULES: list[tuple[str, str, str, str]] = [
 ]
 COMPILED = [(i, s, t, re.compile(r, re.I | re.S)) for i, s, t, r in RULES]
 
-RULE_IDS = {r[0] for r in RULES}
+RULE_IDS = {r[0] for r in RULES} | {f"ai-{l}" for l in aimodel.LABELS}
 SCRIPT_EXT = {"ps1", "psm1", "bat", "cmd", "vbs", "vbe", "js", "jse", "hta", "wsf", "sh", "bash", "py", "php", "pl", "rb"}
 IMAGE_EXT = {"png", "bmp", "gif", "webp", "tif", "tiff"}
 
@@ -126,9 +127,20 @@ def clip(text: str) -> str:
     return text if len(text) <= PREVIEW else text[:PREVIEW] + "\n... (cut, %d more characters)" % (len(text) - PREVIEW)
 
 
+def ai_findings(text: str, where: str) -> list[dict]:
+    """Second opinion from the local int8 classifier (aimodel.py). Alone it can only make a file 'suspicious'."""
+    r = aimodel.classify(text)
+    if not r or r["label"] == "benign" or r["confidence"] < 0.8:
+        return []
+    pct = round(r["confidence"] * 100)
+    sev = "high" if r["confidence"] >= 0.9 else "medium"
+    return [finding(f"ai-{r['label']}", sev, f"AI model: this script {aimodel.LABEL_TEXT[r['label']]}",
+                    f"{where}: the local int8 classifier is {pct}% sure this is a '{r['label']}' script")]
+
+
 def scan_text(text: str, where: str, depth: int = 0) -> list[dict]:
-    """Run every rule on a piece of text; decode base64 blobs and read them as well."""
-    out: list[dict] = []
+    """Run every rule on a piece of text; decode base64 blobs and read them as well. At depth 0 the AI model also looks."""
+    out: list[dict] = ai_findings(text, where) if depth == 0 else []
     seen: set[str] = set()
     for fid, sev, title, rx in COMPILED:
         m = rx.search(text)
@@ -345,6 +357,13 @@ def pdf_scan(path: str) -> tuple[list[dict], list[dict]]:
             findings.append(finding("raw-url", "medium", "PDF links to a raw IP address", m.group(1).decode("latin-1")))
             break
     return findings, hidden
+
+
+@router.get("/ai")
+def ai_status():
+    f = aimodel.MODEL_FILE
+    return {"available": f.exists(), "dtype": "int8", "size_kb": round(f.stat().st_size / 1024) if f.exists() else 0,
+            "classes": aimodel.LABELS, "features": aimodel.FEATURES}
 
 
 # ---------------------------------------------------------------- endpoint

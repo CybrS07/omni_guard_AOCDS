@@ -52,6 +52,7 @@ pub fn router(st: Shared) -> Router {
         .route("/api/firewall/rules/delete", post(fw_delete))
         .route("/api/firewall/block-ip", post(fw_block))
         .route("/api/firewall/logging", post(fw_logging))
+        .route("/api/firewall/clear", post(fw_clear))
         .route("/api/firewall/port/stop", post(fw_port_stop))
         .route("/api/firewall/port/start", post(fw_port_start))
         .route("/api/events", get(events))
@@ -63,6 +64,16 @@ pub fn router(st: Shared) -> Router {
         .route("/api/filescan/status", get(filescan_status))
         .route("/api/filescan/cancel", post(filescan_cancel))
         .route("/api/filescan/monitor", get(filescan_monitor))
+        .route("/api/netwatch", get(netwatch_list))
+        .route("/api/settings", get(settings_get))
+        .route("/api/settings/watch-dirs", post(settings_dirs))
+        .route("/api/services", get(services_list))
+        .route("/api/services/set", post(services_set))
+        .route("/api/integrity", get(integrity_list))
+        .route("/api/integrity/add", post(integrity_add))
+        .route("/api/integrity/remove", post(integrity_remove))
+        .route("/api/integrity/accept", post(integrity_accept))
+        .route("/api/integrity/check", post(integrity_check))
         .route("/api/software", get(software_list))
         .route("/api/software/rescan", post(software_rescan))
         .layer(middleware::from_fn_with_state(st.clone(), guard))
@@ -431,7 +442,7 @@ async fn dns_resolve(State(st): State<Shared>, Query(p): Query<DnsQ>) -> ApiResu
 
 async fn downloads_list(State(st): State<Shared>) -> ApiResult {
     let watching: Vec<String> = crate::downloads::watch_dirs(&st.cfg).iter().map(|p| p.display().to_string()).collect();
-    Ok(Json(json!({ "enabled": st.cfg.download_monitor, "watching": watching, "items": st.downloads.list() })))
+    Ok(Json(json!({ "enabled": crate::settings::enabled("downloads"), "watching": watching, "items": st.downloads.list() })))
 }
 
 #[derive(Deserialize)]
@@ -452,10 +463,12 @@ async fn downloads_decide(State(st): State<Shared>, Json(b): Json<DecisionBody>)
 struct BrowseQ {
     #[serde(default)]
     path: String,
+    #[serde(default)]
+    files: bool,
 }
 
 async fn filescan_browse(Query(q): Query<BrowseQ>) -> ApiResult {
-    let v = blocking(move || crate::filescan::browse(&q.path)).await?.map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    let v = blocking(move || crate::filescan::browse(&q.path, q.files)).await?.map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(v))
 }
 
@@ -493,7 +506,7 @@ async fn filescan_status(State(st): State<Shared>, Query(q): Query<StatusQ>) -> 
 
 async fn filescan_monitor(State(st): State<Shared>) -> Json<Value> {
     let watching: Vec<String> = crate::downloads::watch_dirs(&st.cfg).iter().map(|p| p.display().to_string()).collect();
-    Json(json!({ "enabled": st.cfg.download_monitor && st.cfg.scan_download_files, "watching": watching, "items": st.filescan.monitor_items() }))
+    Json(json!({ "enabled": crate::settings::enabled("filescan"), "watching": watching, "items": st.filescan.monitor_items() }))
 }
 
 #[derive(Deserialize)]
@@ -505,6 +518,110 @@ async fn filescan_cancel(State(st): State<Shared>, Json(b): Json<CancelBody>) ->
     Ok(Json(json!({ "cancelled": st.filescan.cancel(&b.id) })))
 }
 
+// ------------------------------------------------------------------ firewall clear, traffic watch, settings, services, integrity
+
+async fn fw_clear(State(st): State<Shared>) -> ApiResult {
+    need_admin(&st)?;
+    let s = st.clone();
+    let n = blocking(move || s.firewall.clear_managed()).await?.map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    st.log("permissions", "WARN", format!("FIREWALL_CLEARED removed {n} rules created by this app"));
+    Ok(Json(json!({ "removed": n })))
+}
+
+async fn netwatch_list() -> Json<Value> {
+    Json(json!({ "items": crate::netwatch::snapshot(), "enabled": crate::settings::enabled("netwatch") }))
+}
+
+async fn settings_get(State(st): State<Shared>) -> Json<Value> {
+    let dirs: Vec<String> = crate::downloads::watch_dirs(&st.cfg).iter().map(|p| p.display().to_string()).collect();
+    Json(json!({ "watch_dirs": dirs, "custom_dirs": crate::settings::is_custom(), "admin": st.is_admin, "demo": st.demo, "version": env!("CARGO_PKG_VERSION"), "log_dir": st.logger.dir().display().to_string(), "data_dir": st.cfg.data_dir }))
+}
+
+#[derive(Deserialize)]
+struct DirBody {
+    action: String,
+    #[serde(default)]
+    path: String,
+}
+
+async fn settings_dirs(State(st): State<Shared>, Json(b): Json<DirBody>) -> ApiResult {
+    let current = crate::downloads::watch_dirs(&st.cfg);
+    crate::settings::change_dirs(current, &b.action, &b.path).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    st.log("apps", "INFO", format!("WATCH_FOLDERS {} {}", b.action, b.path));
+    settings_get(State(st)).await.0.pipe_ok()
+}
+
+trait PipeOk {
+    fn pipe_ok(self) -> ApiResult;
+}
+impl PipeOk for Value {
+    fn pipe_ok(self) -> ApiResult {
+        Ok(Json(self))
+    }
+}
+
+async fn services_list(State(st): State<Shared>) -> Json<Value> {
+    // the two parts that are not switched from here: the agent itself and the Python scan service
+    let scan_up = crate::intel_client::get_ok(&st.cfg.intel_url, "/api/health");
+    Json(json!({
+        "services": crate::settings::list(),
+        "external": [
+            { "name": "agent", "label": "Agent (this service)", "about": "Collectors, firewall, API. To run it as a Windows service use: soc-agent install / start / stop / uninstall (Administrator).", "running": true },
+            { "name": "scan", "label": "Scan + AI service (Python)", "about": "Face scan, VirusTotal/NVD lookups, hidden-pixel decoding and the local int8 script classifier. Started and stopped together with the app.", "running": scan_up },
+        ],
+    }))
+}
+
+#[derive(Deserialize)]
+struct SvcBody {
+    name: String,
+    running: Option<bool>,
+    autostart: Option<bool>,
+}
+
+async fn services_set(State(st): State<Shared>, Json(b): Json<SvcBody>) -> ApiResult {
+    if let Some(on) = b.running {
+        crate::settings::set_running(&b.name, on).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+        st.log("access", "WARN", format!("SERVICE_{} {}", if on { "STARTED" } else { "STOPPED" }, b.name));
+    }
+    if let Some(on) = b.autostart {
+        crate::settings::set_autostart(&b.name, on).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+        st.log("access", "INFO", format!("SERVICE_AUTOSTART {} = {on}", b.name));
+    }
+    Ok(Json(json!({ "services": crate::settings::list() })))
+}
+
+async fn integrity_list(State(st): State<Shared>) -> Json<Value> {
+    Json(json!({ "items": st.integrity.list(), "enabled": crate::settings::enabled("integrity") }))
+}
+
+#[derive(Deserialize)]
+struct PathBody {
+    path: String,
+}
+
+async fn integrity_add(State(st): State<Shared>, Json(b): Json<PathBody>) -> ApiResult {
+    st.integrity.add(&st, &b.path).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn integrity_remove(State(st): State<Shared>, Json(b): Json<PathBody>) -> ApiResult {
+    Ok(Json(json!({ "removed": st.integrity.remove(&st, &b.path) })))
+}
+
+async fn integrity_accept(State(st): State<Shared>, Json(b): Json<PathBody>) -> ApiResult {
+    let s = st.clone();
+    blocking(move || s.integrity.rebaseline(&s, &b.path)).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn integrity_check(State(st): State<Shared>) -> ApiResult {
+    st.integrity.request_full();
+    let s = st.clone();
+    blocking(move || s.integrity.check_all(&s, true)).await?;
+    Ok(Json(json!({ "items": st.integrity.list() })))
+}
+
 // ------------------------------------------------------------------ installed software (NVD)
 
 async fn software_list(State(st): State<Shared>) -> Json<Value> {
@@ -512,7 +629,7 @@ async fn software_list(State(st): State<Shared>) -> Json<Value> {
     let vulnerable = items.iter().filter(|s| s.status == "vulnerable").count();
     let pending = items.iter().filter(|s| s.status == "pending").count();
     Json(json!({
-        "enabled": st.cfg.software_check,
+        "enabled": crate::settings::enabled("software"),
         "scanning": st.software.scanning.load(std::sync::atomic::Ordering::SeqCst),
         "last_scan": st.software.last_scan(),
         "total": items.len(), "vulnerable": vulnerable, "pending": pending,

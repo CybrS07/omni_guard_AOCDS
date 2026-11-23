@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import Button from './Button.jsx'
 import { useToast } from './Feedback.jsx'
 import Icon from './Icon.jsx'
+import NvdNotice from './NvdNotice.jsx'
 import { copyText } from '../export.js'
 import { scanApi } from '../scan/scanApi.js'
 
@@ -44,7 +45,9 @@ export default function CheckServices() {
       </p>
       <div style={{ display: 'grid', gap: 18 }}>
         <HashCheck copy={copy} />
+        <DomainCheck copy={copy} />
         <AppCheck copy={copy} />
+        <NvdNotice compact />
       </div>
     </div>
   )
@@ -159,6 +162,7 @@ function AppCheck({ copy }) {
             {res.cve_count > 0 && <span className="hint">{res.cve_count} CVEs · worst CVSS {res.max_score}{res.fixed_in ? ` · update to ${res.fixed_in}` : res.patch_available ? ' · a patch exists' : ''}</span>}
             <Button size="sm" icon="fileText" onClick={() => copy(JSON.stringify(res, null, 2), 'Result')}>Copy result</Button>
           </div>
+          {res.cve_count > res.cves?.length && <div className="hint">Showing the first {res.cves.length} of {res.cve_count} CVEs. Open the NVD links for the rest.</div>}
           {res.cves?.length > 0 && (
             <div className="table-wrap">
               <table>
@@ -178,6 +182,81 @@ function AppCheck({ copy }) {
           )}
           {res.status === 'ok' && <div className="hint"><b>No record found</b> in the NVD for this application and version.</div>}
           {res.notes?.map((n) => <div key={n} className="hint">{n}</div>)}
+        </div>
+      )}
+    </form>
+  )
+}
+
+const LEVEL = {
+  ok: { tone: 'ok', text: 'No warning signs' },
+  watch: { tone: 'high', text: 'Check carefully' },
+  danger: { tone: 'critical', text: 'Risky' },
+  unknown: { tone: 'info', text: 'No record found' },
+}
+
+function DomainCheck({ copy }) {
+  const [target, setTarget] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [res, setRes] = useState(null)
+  const [err, setErr] = useState('')
+
+  const check = async (e) => {
+    e.preventDefault()
+    if (!target.trim()) return setErr('Paste a link or type a domain.')
+    setBusy(true)
+    setErr('')
+    setRes(null)
+    try {
+      const r = await scanApi('/intel/domain', { method: 'POST', body: { target: target.trim() } })
+      if (r.error) setErr(r.error)
+      else setRes(r)
+    } catch (ex) {
+      setErr(ex.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const reg = res?.registration
+  const tls = res?.tls
+  const lv = res ? LEVEL[res.level] : null
+  return (
+    <form onSubmit={check} aria-label="Link and domain check">
+      <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>Link or domain &rarr; is it real?</h3>
+      <div className="toolbar">
+        <input className="input" style={{ flex: 1, minWidth: 260 }} placeholder="https://example.com/login or example.com" aria-label="Link or domain" value={target} onChange={(e) => setTarget(e.target.value)} />
+        <Button type="submit" variant="primary" busy={busy}>Check link</Button>
+      </div>
+      <div className="hint" style={{ marginTop: 6 }}>Looks up the registration record, HTTPS certificate and subdomains. The site itself is not opened.</div>
+      {err && <div className="form-error" role="alert">{err}</div>}
+      {res && (
+        <div style={{ marginTop: 10, display: 'grid', gap: 10 }}>
+          <div className="toolbar">
+            <span className={`pill ${lv.tone}`}>{lv.text}</span>
+            <span className="mono">{res.host}</span>
+            {res.ips.length > 0 && <span className="hint">&rarr; {res.ips.join(', ')}</span>}
+            <Button size="sm" icon="fileText" onClick={() => copy(JSON.stringify(res, null, 2), 'Result')}>Copy result</Button>
+          </div>
+          {res.reasons.length > 0 && <ul style={{ margin: 0, paddingLeft: 18 }}>{res.reasons.map((r) => <li key={r}>{r}</li>)}</ul>}
+          {res.level === 'ok' && <div className="hint">No warning signs were found. That does not prove a site is safe: always check the address you actually type or click.</div>}
+          <dl style={{ margin: 0, display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '4px 16px' }}>
+            <dt className="muted">Registered</dt>
+            <dd style={{ margin: 0 }}>{reg ? `${reg.created || 'unknown'}${reg.age_days != null ? ` (${reg.age_days} days ago)` : ''}` : <b>No record found</b>}</dd>
+            {reg && <><dt className="muted">Expires</dt><dd style={{ margin: 0 }}>{reg.expires || 'unknown'}</dd></>}
+            {reg?.registrar && <><dt className="muted">Registrar</dt><dd style={{ margin: 0 }}>{reg.registrar}</dd></>}
+            <dt className="muted">HTTPS</dt>
+            <dd style={{ margin: 0 }}>
+              {tls.ok ? `valid · issued by ${tls.issuer || 'unknown'} · until ${tls.not_after} (${tls.days_left} days left)` : <span>{tls.error}{tls.issuer ? ` · issuer ${tls.issuer}` : ''}</span>}
+            </dd>
+            {res.vt && <><dt className="muted">VirusTotal</dt><dd style={{ margin: 0 }}>{res.vt.malicious} malicious · {res.vt.suspicious} suspicious · <a href={res.vt.link} target="_blank" rel="noreferrer">open</a></dd></>}
+          </dl>
+          {res.subdomains.length > 0 && (
+            <div>
+              <div className="muted" style={{ marginBottom: 4 }}>Subdomains seen in certificates ({res.subdomains.length})</div>
+              <div className="chip-row">{res.subdomains.map((d) => <span key={d} className="pill flat info mono">{d}</span>)}</div>
+            </div>
+          )}
         </div>
       )}
     </form>

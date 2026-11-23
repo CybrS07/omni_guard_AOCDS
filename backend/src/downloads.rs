@@ -119,6 +119,9 @@ impl Store {
 
 /// Folders to watch: `watch_dirs` from config.json, otherwise Downloads + Desktop of every user.
 pub fn watch_dirs(cfg: &Config) -> Vec<PathBuf> {
+    if let Some(v) = crate::settings::watch_dirs_override() {
+        return v;
+    }
     if !cfg.watch_dirs.is_empty() {
         return cfg.watch_dirs.iter().map(PathBuf::from).collect();
     }
@@ -172,10 +175,6 @@ fn wanted(path: &Path, exts: &[String]) -> bool {
 }
 
 pub fn spawn(st: Arc<AppState>) {
-    if !st.cfg.download_monitor {
-        st.log("apps", "INFO", "DOWNLOAD_MONITOR disabled in config.json");
-        return;
-    }
     // After a restart, items that were still waiting for the user ask again.
     for it in st.downloads.list() {
         match it.status.as_str() {
@@ -204,6 +203,11 @@ fn watch_loop(st: Arc<AppState>) {
     let mut first = true;
 
     loop {
+        if !crate::settings::enabled("downloads") {
+            std::thread::sleep(Duration::from_secs(2));
+            continue;
+        }
+        crate::settings::beat("downloads");
         let dirs = watch_dirs(&st.cfg);
         if first {
             st.log("apps", "INFO", format!("DOWNLOAD_MONITOR watching {}", dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join(" | ")));

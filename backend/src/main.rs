@@ -11,11 +11,14 @@ mod filescan;
 mod fileinfo;
 mod firewall;
 mod intel_client;
+mod integrity;
 mod isolation;
 mod logs;
+mod netwatch;
 mod ports;
 #[cfg(windows)]
 mod service;
+mod settings;
 mod software;
 mod state;
 mod system;

@@ -1,12 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import Button from '../components/Button.jsx'
-import { Radar } from '../components/Loader.jsx'
+import { ShieldPulse } from '../components/Loader.jsx'
 import { CamStage, useFaceCam } from './FaceCam.jsx'
 import { POSES, ScanError, scanApi } from './scanApi.js'
 import './scan.css'
 
 const KEY = 'soc-scan-session'
-const ScanCtx = createContext({ user: null, role: null, lock: null })
+const ScanCtx = createContext({ user: null, role: null, token: null, lock: null })
 
 /** Who is signed in through the face scan (null when the gate is switched off). */
 export const useScan = () => useContext(ScanCtx)
@@ -42,6 +42,7 @@ function Gate({ children }) {
   const [verified, setVerified] = useState(false)
   const [phase, setPhase] = useState('boot') // boot | enroll | login
   const [bootError, setBootError] = useState('')
+  const [faceRequired, setFaceRequired] = useState(false)
 
   const open = useCallback((s) => {
     writeSession(s)
@@ -77,6 +78,7 @@ function Gate({ children }) {
         const st = await scanApi('/status')
         if (alive) {
           setBootError('')
+          setFaceRequired(!!st.face_required)
           setPhase(st.enrolled ? 'login' : 'enroll')
         }
       } catch (e) {
@@ -93,7 +95,7 @@ function Gate({ children }) {
     }
   }, [verified, phase])
 
-  const ctx = useMemo(() => ({ user: session?.user ?? null, role: session?.role ?? null, lock }), [session, lock])
+  const ctx = useMemo(() => ({ user: session?.user ?? null, role: session?.role ?? null, token: session?.token ?? null, lock }), [session, lock])
 
   if (verified) return <ScanCtx.Provider value={ctx}>{children}</ScanCtx.Provider>
 
@@ -101,42 +103,50 @@ function Gate({ children }) {
     <div className="scan-wrap">
       {phase === 'boot' && (
         <div className="scan-card center">
-          <Radar size={130} />
+          <ShieldPulse size={110} />
           <h1>OMNI GUARD AOCDS</h1>
           <p className="muted">{bootError ? 'Waiting for the scan service…' : 'Starting security scan…'}</p>
           {bootError && <p className="hint">{bootError} It is started by <code>npm run dev</code>; the first start downloads the face models.</p>}
         </div>
       )}
       {phase === 'enroll' && <Enroll onDone={open} />}
-      {phase === 'login' && <Login onDone={open} />}
+      {phase === 'login' && <Login onDone={open} faceRequired={faceRequired} />}
     </div>
   )
 }
 
 // ------------------------------------------------------------------ login
 
-function Login({ onDone }) {
-  const { videoRef, overlayRef, cam, faceOk, grab } = useFaceCam(true)
+function Login({ onDone, faceRequired }) {
+  // Password is the normal way in. The camera is the second option (or mandatory when the admin turned that on).
+  const [useFace, setUseFace] = useState(faceRequired)
+  const { videoRef, overlayRef, cam, faceOk, grab } = useFaceCam(useFace)
   const [f, setF] = useState({ username: '', password: '' })
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }))
+  useEffect(() => { if (faceRequired) setUseFace(true) }, [faceRequired])
 
   const submit = async (e) => {
     e.preventDefault()
-    if (!faceOk) return setMsg('Position your face in front of the camera first.')
+    if (useFace && !faceOk) return setMsg('Position your face in front of the camera first.')
     setBusy(true)
     setMsg('')
     try {
       const images = []
-      for (let i = 0; i < 4; i++) {
-        const img = grab()
-        if (img) images.push(img)
-        await new Promise((r) => setTimeout(r, 250))
+      if (useFace) {
+        for (let i = 0; i < 4; i++) {
+          const img = grab()
+          if (img) images.push(img)
+          await new Promise((r) => setTimeout(r, 250))
+        }
       }
       const r = await scanApi('/login', { method: 'POST', body: { ...f, images } })
       if (r.ok) onDone(r.session)
-      else setMsg(r.message)
+      else {
+        if (r.code === 'face_required') setUseFace(true)
+        setMsg(r.message)
+      }
     } catch (ex) {
       setMsg(ex instanceof ScanError ? ex.message : 'Sign-in failed.')
     } finally {
@@ -146,10 +156,14 @@ function Login({ onDone }) {
 
   return (
     <form className="scan-card" onSubmit={submit}>
-      <h1>Security scan</h1>
-      <p className="muted">Enter your password and look at the camera.</p>
-      <CamStage cam={cam} videoRef={videoRef} overlayRef={overlayRef} ok={faceOk} />
-      <div className={`cam-hint ${faceOk ? 'ok' : ''}`}>{faceOk ? 'Face detected' : 'No face detected yet'}</div>
+      <h1>Sign in</h1>
+      <p className="muted">{useFace ? 'Enter your password and look at the camera.' : 'Enter your username and password.'}</p>
+      {useFace && (
+        <>
+          <CamStage cam={cam} videoRef={videoRef} overlayRef={overlayRef} ok={faceOk} />
+          <div className={`cam-hint ${faceOk ? 'ok' : ''}`}>{faceOk ? 'Face detected' : 'No face detected yet'}</div>
+        </>
+      )}
       <div className="field">
         <label htmlFor="s-user">Username</label>
         <input id="s-user" className="input" autoFocus autoComplete="username" required value={f.username} onChange={set('username')} />
@@ -159,7 +173,10 @@ function Login({ onDone }) {
         <input id="s-pass" className="input" type="password" autoComplete="current-password" required value={f.password} onChange={set('password')} />
       </div>
       {msg && <div className="form-error" role="alert">{msg}</div>}
-      <Button type="submit" variant="primary" busy={busy} disabled={cam.status !== 'ready'}>Scan &amp; sign in</Button>
+      <Button type="submit" variant="primary" busy={busy} disabled={useFace && cam.status !== 'ready'}>{useFace ? 'Verify face & sign in' : 'Sign in'}</Button>
+      {!faceRequired && (
+        <Button type="button" variant="outline" onClick={() => setUseFace((v) => !v)}>{useFace ? 'Use password only' : 'Also verify with face scan'}</Button>
+      )}
     </form>
   )
 }

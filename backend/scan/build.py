@@ -27,6 +27,8 @@ pyi.run([
     "--collect-submodules", "uvicorn",
     "--hidden-import", "server",
     "--hidden-import", "scan",
+    "--hidden-import", "aimodel",
+    "--add-data", f"{HERE / 'models'}{sep}models",
     *[a for w in weights for a in ("--add-data", f"{w}{sep}.")],
 ])
 print("scan service frozen ->", HERE / "dist" / "soc-scan")

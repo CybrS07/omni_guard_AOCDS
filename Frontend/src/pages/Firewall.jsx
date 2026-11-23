@@ -5,6 +5,7 @@ import Button from '../components/Button.jsx'
 import { Confirm, useToast } from '../components/Feedback.jsx'
 import Icon from '../components/Icon.jsx'
 import { Bars } from '../components/Loader.jsx'
+import TrafficWatch from '../components/TrafficWatch.jsx'
 import { timeAgo } from '../format.js'
 
 const PAGE = 30
@@ -26,6 +27,8 @@ export default function Firewall({ status }) {
   const [refreshing, setRefreshing] = useState(false)
   const [portToStop, setPortToStop] = useState(null) // {port, proto, process}
   const [busyPort, setBusyPort] = useState(null)
+  const [confirmClear, setConfirmClear] = useState(false)
+  const [clearing, setClearing] = useState(false)
 
   const rules = fw?.rules || []
   const filtered = useMemo(() => {
@@ -47,6 +50,20 @@ export default function Firewall({ status }) {
     }
     return set
   }, [rules])
+  const mineCount = rules.filter((r) => r.managed).length
+  const clearMine = async () => {
+    setClearing(true)
+    try {
+      const r = await api('/firewall/clear', { method: 'POST' })
+      toast(r.removed ? `Removed ${r.removed} rules created by this app` : 'Nothing to clear')
+      setConfirmClear(false)
+      reload()
+    } catch (e) {
+      toast(e.message, 'err')
+    } finally {
+      setClearing(false)
+    }
+  }
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE))
   const view = filtered.slice(page * PAGE, page * PAGE + PAGE)
 
@@ -136,6 +153,7 @@ export default function Firewall({ status }) {
           <p>{rules.length} rules · create allow/block rules for inbound and outbound traffic</p>
         </div>
         <div className="toolbar">
+          <Button tone="danger" icon="trash" disabled={!canEdit || mineCount === 0} onClick={() => setConfirmClear(true)}>Clear app rules ({mineCount})</Button>
           <Button icon="refresh" busy={refreshing} onClick={refreshNow}>Reload from Windows</Button>
         </div>
       </div>
@@ -172,6 +190,8 @@ export default function Firewall({ status }) {
             </div>
             {!loggingOn && <div className="hint">Port-scan detection reads Windows' dropped-packet log. Turn it on to catch scans and repeated probes of sensitive ports.</div>}
           </div>
+
+          <TrafficWatch onBlocked={reload} />
 
           {/* ---- rules table ---- */}
           <div className="panel">
@@ -311,6 +331,18 @@ export default function Firewall({ status }) {
           </table>
         </div>
       </div>
+
+      {confirmClear && (
+        <Confirm
+          danger
+          busy={clearing}
+          title={`Clear ${mineCount} rules created by this app?`}
+          body="Removes every Windows Firewall rule whose name starts with SOC- : blocked addresses, blocked domains and stopped ports. Traffic that was blocked by them flows again. Rules that Windows or other programs created are not touched."
+          confirmLabel="Clear all"
+          onConfirm={clearMine}
+          onCancel={() => setConfirmClear(false)}
+        />
+      )}
 
       {portToStop && (
         <Confirm
