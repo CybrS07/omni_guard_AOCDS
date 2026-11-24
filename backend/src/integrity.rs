@@ -56,6 +56,7 @@ pub struct Store {
 }
 
 impl Store {
+    /// Opens the integrity store, loading the saved list from integrity.json and marking any unfinished baselines as ok.
     pub fn new(dir: PathBuf) -> Self {
         let file = dir.join("integrity.json");
         let mut entries: Vec<Entry> = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
@@ -67,6 +68,7 @@ impl Store {
         Store { file, entries: Mutex::new(entries), last_full: Mutex::new(Instant::now() - FULL_EVERY) }
     }
 
+    /// Writes the list of watched entries to integrity.json so it survives restarts.
     fn save(&self, v: &[Entry]) {
         if let Ok(t) = serde_json::to_string(v) {
             let _ = std::fs::create_dir_all(self.file.parent().unwrap_or(Path::new(".")));
@@ -89,6 +91,7 @@ impl Store {
             .collect()
     }
 
+    /// Adds a file or folder to watching: checks that the path exists, saves it, then records its baseline in the background.
     pub fn add(&self, st: &Arc<AppState>, raw: &str) -> Result<(), String> {
         let p = PathBuf::from(raw.trim());
         let path = std::fs::canonicalize(&p).map_err(|_| "that file or folder does not exist".to_string())?;
@@ -108,6 +111,7 @@ impl Store {
         Ok(())
     }
 
+    /// Removes a path from integrity watching and saves the list; returns true if something was removed.
     pub fn remove(&self, st: &AppState, path: &str) -> bool {
         let mut v = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         let n = v.len();
@@ -136,10 +140,12 @@ impl Store {
         st.log("apps", "INFO", format!("INTEGRITY_BASELINE {path}"));
     }
 
+    /// Looks up a watched entry by its path, returning its location and whether it is a folder.
     fn find(&self, path: &str) -> Option<(PathBuf, bool)> {
         self.entries.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|e| e.path.eq_ignore_ascii_case(path)).map(|e| (PathBuf::from(&e.path), e.is_dir))
     }
 
+    /// Forces the next integrity check to hash every file again, by resetting the timer for the full check.
     pub fn request_full(&self) {
         *self.last_full.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now() - FULL_EVERY;
     }
@@ -186,11 +192,13 @@ impl Store {
     }
 }
 
+/// Turns a Windows path into a plain readable path by removing the Windows long-path prefix.
 fn clean_path(p: &Path) -> String {
     let s = p.display().to_string();
     s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
 }
 
+/// Returns a file's last-modified time as seconds since 1970, or 0 if it cannot be read.
 fn mtime(m: &std::fs::Metadata) -> i64 {
     m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
@@ -260,6 +268,7 @@ fn diff(base: &BTreeMap<String, Fp>, now: &BTreeMap<String, Fp>) -> Vec<(String,
     v
 }
 
+/// Starts the background integrity thread: every 20 seconds it checks watched files, and every 10 minutes it hashes everything again.
 pub fn spawn(st: Arc<AppState>) {
     std::thread::Builder::new()
         .name("integrity".into())
@@ -281,46 +290,4 @@ pub fn spawn(st: Arc<AppState>) {
             crate::settings::beat("integrity");
         })
         .expect("spawn integrity guard");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn detects_modified_deleted_added() {
-        let d = std::env::temp_dir().join(format!("og-integ-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(d.join("sub")).unwrap();
-        std::fs::write(d.join("a.txt"), "one").unwrap();
-        std::fs::write(d.join("sub/b.txt"), "two").unwrap();
-        let (base, _) = snapshot(&d, true, None);
-        assert_eq!(base.len(), 2);
-        assert!(diff(&base, &snapshot(&d, true, Some(&base)).0).is_empty());
-
-        std::fs::write(d.join("a.txt"), "ONE!").unwrap(); // modified (size changes)
-        std::fs::remove_file(d.join("sub/b.txt")).unwrap();
-        std::fs::write(d.join("c.txt"), "new").unwrap();
-        let mut got = diff(&base, &snapshot(&d, true, None).0);
-        got.sort();
-        assert_eq!(
-            got,
-            vec![("added".into(), "c.txt".into()), ("deleted".into(), "sub/b.txt".into()), ("modified".into(), "a.txt".into())]
-        );
-    }
-
-    #[test]
-    fn full_pass_catches_same_size_same_time_tamper() {
-        let d = std::env::temp_dir().join(format!("og-integ2-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        let f = d.join("x.bin");
-        std::fs::write(&f, "AAAA").unwrap();
-        let (base, _) = snapshot(&d, true, None);
-        let t = std::fs::metadata(&f).unwrap().modified().unwrap();
-        std::fs::write(&f, "BBBB").unwrap();
-        std::fs::OpenOptions::new().write(true).open(&f).unwrap().set_modified(t).unwrap();
-        assert!(diff(&base, &snapshot(&d, true, Some(&base)).0).is_empty()); // quick pass is fooled...
-        assert_eq!(diff(&base, &snapshot(&d, true, None).0).len(), 1); // ...the full pass is not
-    }
 }

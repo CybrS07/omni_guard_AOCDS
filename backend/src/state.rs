@@ -10,6 +10,7 @@ use crate::filescan::Store as FileScanStore;
 use crate::integrity::Store as IntegrityStore;
 use crate::firewall::Firewall;
 use crate::logs::Logger;
+use crate::registry::Store as RegistryStore;
 use crate::software::Store as SoftwareStore;
 use crate::system::SystemInfo;
 use crate::util::now_iso;
@@ -177,11 +178,13 @@ pub struct AppState {
     pub filescan: FileScanStore,
     pub integrity: IntegrityStore,
     pub software: SoftwareStore,
+    pub registry: RegistryStore,
     cooldowns: Mutex<HashMap<String, Instant>>,
     next_alert_id: Mutex<u64>,
 }
 
 impl AppState {
+    /// Build the shared application state from the config, creating each store and logger in the data folder.
     pub fn new(cfg: Config, demo: bool, is_admin: bool, token: String) -> Self {
         let dir = PathBuf::from(&cfg.data_dir).join("logs");
         AppState {
@@ -191,6 +194,7 @@ impl AppState {
             filescan: FileScanStore::new(),
             integrity: IntegrityStore::new(PathBuf::from(&cfg.data_dir)),
             software: SoftwareStore::new(PathBuf::from(&cfg.data_dir)),
+            registry: RegistryStore::new(PathBuf::from(&cfg.data_dir)),
             cfg,
             demo,
             is_admin,
@@ -204,6 +208,7 @@ impl AppState {
         }
     }
 
+    /// Write one line to the log file of the given kind and level.
     pub fn log(&self, kind: &str, level: &str, msg: impl AsRef<str>) {
         self.logger.write(kind, level, msg.as_ref());
     }
@@ -259,6 +264,7 @@ impl AppState {
     }
 }
 
+/// Classify a percentage as critical, high, idle or normal, so the dashboard can colour it.
 pub fn level(v: f32, high: f32, idle_below: f32) -> &'static str {
     if v >= 95.0 {
         "critical"
@@ -271,6 +277,7 @@ pub fn level(v: f32, high: f32, idle_below: f32) -> &'static str {
     }
 }
 
+/// Classify a temperature in Celsius as critical, high or normal, based on the high threshold.
 pub fn temp_level(c: f32, high: f32) -> &'static str {
     if c >= high + 10.0 {
         "critical"

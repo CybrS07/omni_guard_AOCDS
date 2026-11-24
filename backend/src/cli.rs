@@ -18,6 +18,7 @@ pub enum Action {
     Done(i32),
 }
 
+/// Reads the command-line words and runs the matching management command; otherwise the agent runs normally.
 pub fn dispatch(args: &[String]) -> Action {
     let cmd = args.iter().skip(1).find(|a| !a.starts_with("--")).map(|s| s.as_str());
     match cmd {
@@ -47,6 +48,7 @@ USAGE:
   soc-agent start | stop | status
   soc-agent version";
 
+/// Prints a command's result (or its error) and turns it into a process exit code: 0 for success, 1 for failure.
 fn wrap(r: Result<String, String>) -> i32 {
     match r {
         Ok(m) => {
@@ -60,6 +62,7 @@ fn wrap(r: Result<String, String>) -> i32 {
     }
 }
 
+/// Makes sure the command runs on Windows, since service commands only work there.
 fn need_windows() -> Result<(), String> {
     if cfg!(windows) {
         Ok(())
@@ -68,6 +71,7 @@ fn need_windows() -> Result<(), String> {
     }
 }
 
+/// Makes sure the command runs on Windows with administrator rights, which service changes need.
 fn need_admin() -> Result<(), String> {
     need_windows()?;
     if detect_admin() {
@@ -77,6 +81,7 @@ fn need_admin() -> Result<(), String> {
     }
 }
 
+/// Runs the Windows sc.exe tool with the given arguments and returns whether it worked plus its output.
 fn sc(args: &[&str]) -> (bool, String) {
     match run("sc.exe", args, 30) {
         Some(o) => (o.ok, o.stdout.trim().to_string()),
@@ -84,6 +89,7 @@ fn sc(args: &[&str]) -> (bool, String) {
     }
 }
 
+/// Runs an sc.exe service command after the admin check, returning a success message or the error text.
 fn sc_ok(args: &[&str], done: &str) -> Result<String, String> {
     need_admin()?;
     let (ok, out) = sc(args);
@@ -94,6 +100,7 @@ fn sc_ok(args: &[&str], done: &str) -> Result<String, String> {
     }
 }
 
+/// Reads the service state from sc.exe and returns a short line such as 'service NAME: RUNNING'.
 fn status() -> Result<String, String> {
     need_windows()?;
     let (ok, out) = sc(&["query", NAME]);
@@ -108,10 +115,12 @@ fn status() -> Result<String, String> {
     Ok(format!("service {NAME}: {state}"))
 }
 
+/// Works out the folder under Program Files where the agent gets installed.
 fn install_dir() -> PathBuf {
     PathBuf::from(std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".into())).join("SocMonitor")
 }
 
+/// Installs the agent as a Windows service: copies the program, sets file permissions and starts it.
 fn install() -> Result<String, String> {
     need_admin()?;
     let me = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -163,6 +172,7 @@ fn install() -> Result<String, String> {
     ))
 }
 
+/// Removes the Windows service: stops it and deletes it, while keeping the logs and token files.
 fn uninstall() -> Result<String, String> {
     need_admin()?;
     if !sc(&["query", NAME]).0 {

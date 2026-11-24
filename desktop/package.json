@@ -40,6 +40,10 @@
       {
         "from": "../backend/scan/dist/soc-scan",
         "to": "scan/soc-scan"
+      },
+      {
+        "from": "../scripts/uninstall-all.ps1",
+        "to": "cleanup/uninstall-all.ps1"
       }
     ],
     "win": {
@@ -51,7 +55,10 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "perMachine": true
+      "perMachine": true,
+      "deleteAppDataOnUninstall": true,
+      "include": "build/installer.nsh",
+      "uninstallDisplayName": "Omni Guard AOCDS"
     },
     "publish": [
       {

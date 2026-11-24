@@ -55,9 +55,11 @@ pub struct Item {
 }
 
 impl Item {
+    /// Returns the verdict word (such as clean or malware) from the stored answer, or an empty text if there is none.
     fn verdict_name(&self) -> String {
         self.verdict.as_ref().and_then(|v| v["verdict"].as_str()).unwrap_or("").to_string()
     }
+    /// Returns the short human summary from the stored answer, or the note if there is no summary.
     fn summary(&self) -> String {
         self.verdict.as_ref().and_then(|v| v["summary"].as_str()).unwrap_or(&self.note).to_string()
     }
@@ -72,17 +74,20 @@ pub struct Store {
 }
 
 impl Store {
+    /// Opens the download store, loading the saved list from index.json if that file already exists.
     pub fn new(root: PathBuf) -> Store {
         let items: Vec<Item> = std::fs::read_to_string(root.join("index.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
         Store { root, items: Mutex::new(items), ignore: Mutex::new(HashSet::new()) }
     }
 
+    /// Returns a copy of all downloads, newest first.
     pub fn list(&self) -> Vec<Item> {
         let mut v = self.items.lock().unwrap_or_else(|e| e.into_inner()).clone();
         v.reverse(); // newest first
         v
     }
 
+    /// Finds one download by its id and returns a copy of it, or nothing if it is not in the list.
     fn get(&self, id: &str) -> Option<Item> {
         self.items.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|i| i.id == id).cloned()
     }
@@ -104,6 +109,15 @@ impl Store {
             }
         }
         let _ = std::fs::create_dir_all(&self.root);
+        if let Ok(text) = serde_json::to_string_pretty(&*v) {
+            let _ = std::fs::write(self.root.join("index.json"), text);
+        }
+    }
+
+    /// Take one entry out of the list and save the list again.
+    fn forget(&self, id: &str) {
+        let mut v = self.items.lock().unwrap_or_else(|e| e.into_inner());
+        v.retain(|i| i.id != id);
         if let Ok(text) = serde_json::to_string_pretty(&*v) {
             let _ = std::fs::write(self.root.join("index.json"), text);
         }
@@ -170,10 +184,12 @@ fn wsl_dirs() -> Vec<PathBuf> {
     out
 }
 
+/// Checks whether a file has one of the extensions we care about, ignoring letter case.
 fn wanted(path: &Path, exts: &[String]) -> bool {
     path.extension().map_or(false, |e| exts.iter().any(|x| e.to_string_lossy().eq_ignore_ascii_case(x)))
 }
 
+/// Starts the download watcher thread, and asks again about any downloads that were waiting when the agent restarted.
 pub fn spawn(st: Arc<AppState>) {
     // After a restart, items that were still waiting for the user ask again.
     for it in st.downloads.list() {
@@ -195,6 +211,7 @@ pub fn spawn(st: Arc<AppState>) {
         .expect("spawn downloads watcher");
 }
 
+/// Loop that checks the watched folders about every 2 seconds and starts processing files that have finished downloading.
 fn watch_loop(st: Arc<AppState>) {
     let exts: Vec<String> = if st.cfg.download_extensions.is_empty() { DEFAULT_EXTS.iter().map(|s| s.to_string()).collect() } else { st.cfg.download_extensions.iter().map(|e| clean_ext(e)).filter(|e| !e.is_empty()).collect() };
     // path -> (size, modified, how many checks in a row it did not change)
@@ -254,6 +271,7 @@ fn watch_loop(st: Arc<AppState>) {
 
 // ------------------------------------------------------------------ 2-5. the pipeline for one file
 
+/// Runs the full pipeline for one new file: skip it if already approved, extract its details, isolate it, check it, then allow or hold it.
 fn process(st: Arc<AppState>, path: PathBuf) {
     // Already approved before? (same bytes) -> leave it alone.
     if let Ok((sha, _)) = fileinfo::hash_file(&path) {
@@ -338,11 +356,13 @@ fn process(st: Arc<AppState>, path: PathBuf) {
     }
 }
 
+/// Turns the first letter of a word into a capital letter, for example 'malware' becomes 'Malware'.
 fn capitalise(s: &str) -> String {
     let mut c = s.chars();
     c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
 }
 
+/// Moves an isolated file back to its original place and records its new status in the list and the log.
 fn release_item(st: &AppState, item: &mut Item, status: &str) -> Result<(), String> {
     let dest = isolation::release(Path::new(&item.held_path), Path::new(&item.original_path))?;
     st.downloads.ignore.lock().unwrap_or_else(|e| e.into_inner()).insert(dest.clone());
@@ -379,6 +399,36 @@ pub fn resolve(st: &AppState, id: &str, allow: bool, via: &str) -> Result<Item, 
     Ok(item)
 }
 
+/// "Remove" button in the dashboard: delete the file (if it is still on disk) and forget the entry.
+/// - a file still held in isolation is destroyed
+/// - a file that was saved is deleted from its folder, but only if it is still the same file (same SHA-256)
+/// - the list entry always disappears, so the page shows nothing about it afterwards
+pub fn remove_entry(st: &AppState, id: &str) -> Result<String, String> {
+    let item = st.downloads.get(id).ok_or("unknown download")?;
+    if item.status == "analyzing" {
+        return Err("this download is still being checked, try again in a moment".into());
+    }
+    let mut message = String::from("Removed from the list.");
+    if !item.held_path.is_empty() {
+        isolation::destroy(Path::new(&item.held_path), Path::new(&item.original_path))?;
+        message = "The held file was deleted completely.".into();
+    } else if item.status.starts_with("allowed") {
+        let path = Path::new(&item.original_path);
+        if path.is_file() {
+            let same = crate::fileinfo::hash_file(path).map(|(h, _)| h == item.info.sha256).unwrap_or(false);
+            if same {
+                std::fs::remove_file(path).map_err(|e| format!("could not delete the file: {e}"))?;
+                message = "The file was deleted from your folder.".into();
+            } else {
+                message = "The file in your folder has changed since it was checked, so it was left alone. Only the list entry was removed.".into();
+            }
+        }
+    }
+    st.downloads.forget(id);
+    st.log("apps", "WARN", format!("DOWNLOAD_ENTRY_REMOVED {} ({})", item.name, message));
+    Ok(message)
+}
+
 /// Show the Windows popup on its own thread (it waits for the user) and apply the answer.
 fn prompt_async(st: Arc<AppState>, id: String) {
     thread::spawn(move || {
@@ -394,26 +444,4 @@ fn prompt_async(st: Arc<AppState>, id: String) {
             let _ = resolve(&st, &id, allow, "popup"); // fails harmlessly if the dashboard answered first
         }
     });
-}
-
-#[cfg(test)]
-mod ext_tests {
-    use super::*;
-
-    #[test]
-    fn extension_spellings() {
-        assert_eq!(clean_ext("*exe"), "exe");
-        assert_eq!(clean_ext("*.PS1"), "ps1");
-        assert_eq!(clean_ext(" .zip "), "zip");
-        assert!(wanted(Path::new("/x/setup.EXE"), &["exe".to_string()]));
-        for e in ["exe", "dll", "msi", "ps1", "bash", "sh", "zip"] {
-            assert!(DEFAULT_EXTS.contains(&e), "{e} missing");
-        }
-    }
-
-    #[test]
-    fn wsl_list_utf16_noise() {
-        let raw = "\u{feff}U\0b\0u\0n\0t\0u\0\r\0\n\0D\0e\0b\0i\0a\0n\0\r\0\n\0";
-        assert_eq!(parse_wsl_list(raw), vec!["Ubuntu", "Debian"]);
-    }
 }

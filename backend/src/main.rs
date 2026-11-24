@@ -16,6 +16,7 @@ mod isolation;
 mod logs;
 mod netwatch;
 mod ports;
+mod registry;
 #[cfg(windows)]
 mod service;
 mod settings;
@@ -25,6 +26,7 @@ mod system;
 mod util;
 mod watchers;
 
+/// Program entry point: runs as a Windows service, handles a management command, or runs the agent in the console.
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let service_mode = args.iter().any(|a| a == "--service");

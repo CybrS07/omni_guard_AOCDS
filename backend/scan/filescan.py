@@ -29,11 +29,12 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 import aimodel
+import deobf
 import intel
 
 router = APIRouter(prefix="/api/filescan")
 
-PREVIEW = 6000                 # characters of hidden data returned to the dashboard
+PREVIEW = 20000                # characters of hidden data returned to the dashboard
 MAX_TEXT = 2 * 1024 * 1024     # script files bigger than this are only sampled
 MAX_PIXELS = 40_000_000        # refuse to decode giant images (decompression bombs)
 ZIP_ENTRY_MAX = 1024 * 1024    # an archive entry is read only up to this size
@@ -125,6 +126,42 @@ def magic_kind(b: bytes) -> str:
 
 def clip(text: str) -> str:
     return text if len(text) <= PREVIEW else text[:PREVIEW] + "\n... (cut, %d more characters)" % (len(text) - PREVIEW)
+
+
+def make_hidden(where: str, offset: int, length: int, kind: str, text: str) -> dict:
+    """One 'hidden item' for the dashboard. Scripts and text also get a de-obfuscated reading (deobf.py)."""
+    h = {"where": where, "offset": offset, "length": length, "kind": kind, "text": clip(text)}
+    if kind in ("script", "text"):
+        add_deobf(h, text)
+    return h
+
+
+def add_deobf(h: dict, full_text: str) -> None:
+    d = deobf.deobfuscate(full_text)
+    if d["obfuscated"]:
+        for layer in d["layers"]:
+            layer["text"] = clip(layer["text"])
+        d["final"] = clip(d["final"])
+        h["deobf"] = d
+
+
+def deobf_findings(hidden: list[dict]) -> list[dict]:
+    """Findings from the readable version of every obfuscated script (the rules run again on what was hidden)."""
+    out: list[dict] = []
+    for h in hidden:
+        d = h.get("deobf")
+        if not d:
+            continue
+        where = h.get("where", "hidden data")
+        if d["layers"]:
+            steps = " > ".join(layer["method"] for layer in d["layers"])
+            out.append(finding("obfuscated-script", "high", "Script is deliberately obfuscated",
+                               f"{where}: {len(d['layers'])} layer(s) removed ({steps}). The readable script is shown in the dashboard."))
+            out += scan_text(d["final"], f"{where} (after de-obfuscation)")
+        elif d["techniques"]:
+            out.append(finding("obfuscated-script", "medium", "Script uses obfuscation tricks",
+                               f"{where}: {', '.join(d['techniques'][:4])}."))
+    return out
 
 
 def ai_findings(text: str, where: str) -> list[dict]:
@@ -254,7 +291,7 @@ def pixel_scan(path: str, ext: str) -> tuple[list[dict], list[dict], str]:
                 continue
             kind, text = classify_bytes(payload)
             where = f"pixels of the image ({label}{order_name})"
-            hidden.append({"where": where, "offset": 0, "length": len(payload), "kind": kind, "text": clip(text)})
+            hidden.append(make_hidden(where, 0, len(payload), kind, text))
             sev = "critical" if kind in ("pe", "script") or any(rx.search(text) for _, _, _, rx in COMPILED[:5]) else "high"
             findings.append(finding("pixel-hidden", sev, "Data is hidden inside the picture's pixels",
                                     f"{len(payload)} bytes of {kind} are stored in the {label}{order_name}. The picture looks normal but carries a hidden message."))
@@ -328,7 +365,7 @@ def archive_scan(path: str, ext: str, rust_findings: list[dict]) -> tuple[list[d
                 hits = scan_text(txt, f"inside archive: {info.filename}")
                 if hits:
                     findings += hits
-                    hidden.append({"where": f"archive entry {info.filename}", "offset": 0, "length": len(data), "kind": "script", "text": clip(txt)})
+                    hidden.append(make_hidden(f"archive entry {info.filename}", 0, len(data), "script", txt))
             elif mk == "pe" and e_ext not in ("exe", "dll", "scr"):
                 findings.append(finding("disguised-in-zip", "high", "Program disguised inside the archive", f"{info.filename} is a Windows program but is named .{e_ext or '?'}"))
             elif e.endswith("vbaproject.bin"):
@@ -349,7 +386,7 @@ def pdf_scan(path: str) -> tuple[list[dict], list[dict]]:
         return findings, hidden
     for m in re.finditer(rb"/JS\s*\(((?:\\.|[^\\)]){10,4000})\)", raw):
         txt = m.group(1).decode("latin-1", "replace")
-        hidden.append({"where": "PDF JavaScript action", "offset": m.start(), "length": len(txt), "kind": "script", "text": clip(txt)})
+        hidden.append(make_hidden("PDF JavaScript action", m.start(), len(txt), "script", txt))
         findings += scan_text(txt, "PDF JavaScript")
         break
     for m in re.finditer(rb"/(?:URI|F)\s*\((https?://[^)]{4,300})\)", raw):
@@ -413,10 +450,11 @@ def analyze(b: AnalyzeIn):
             with open(p, "rb") as fh:
                 txt = fh.read(MAX_TEXT).decode("utf-8", "replace")
             hits = scan_text(txt, "script file")
-            if hits:
+            item = make_hidden("the file itself", 0, b.size, "script", txt)
+            if hits or item.get("deobf"):
                 findings += hits
                 if not any(x.get("where") == "the file itself" for x in hidden):
-                    hidden.append({"where": "the file itself", "offset": 0, "length": b.size, "kind": "script", "text": clip(txt)})
+                    hidden.append(item)
         except Exception:
             pass
 
@@ -424,6 +462,8 @@ def analyze(b: AnalyzeIn):
     for h in list(hidden):
         if h.get("kind") in ("text", "script") and h.get("text"):
             findings += scan_text(h["text"], h.get("where", "hidden data"))
+            if "deobf" not in h:
+                add_deobf(h, h["text"])
 
     # 4) archives and documents
     if b.kind == "zip" or ext in ("zip", "docx", "xlsx", "pptx", "docm", "xlsm", "jar", "apk"):
@@ -436,6 +476,9 @@ def analyze(b: AnalyzeIn):
         f, h = pdf_scan(str(p))
         findings += f
         hidden += h
+
+    # 4b) read every obfuscated script again after its layers are removed
+    findings += deobf_findings(hidden)
 
     # 5) VirusTotal (hash only)
     vt = None

@@ -7,6 +7,7 @@ import { useToast } from '../components/Feedback.jsx'
 import Icon from '../components/Icon.jsx'
 import { clock } from '../format.js'
 import { copyText } from '../export.js'
+import HiddenScripts from '../components/HiddenScripts.jsx'
 import SoftwarePanel from '../components/SoftwarePanel.jsx'
 
 const TONE = { clean: 'ok', suspicious: 'high', malicious: 'critical' }
@@ -24,14 +25,6 @@ const TYPES = {
 }
 const PC_TYPES = 'exe dll msi scr com lnk bat cmd ps1 psm1 vbs vbe js jse hta wsf jar sh bash zip 7z rar doc docm docx xls xlsm xlsx ppt pptm pdf png bmp gif webp'.split(' ')
 const SYSTEM_DIRS = ['Windows', 'Program Files', 'Program Files (x86)', 'ProgramData']
-const PREF = 'omniguard-scan-options'
-const loadPref = () => {
-  try {
-    return JSON.parse(localStorage.getItem(PREF) || '{}')
-  } catch {
-    return {}
-  }
-}
 const words = (t) => t.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean)
 
 const flat = (r) => ({
@@ -44,18 +37,12 @@ const flat = (r) => ({
 export default function Scan() {
   const toast = useToast()
   const [path, setPath] = useState('')
-  const pref = loadPref()
-  const [recursive, setRecursive] = useState(pref.recursive ?? true)
-  const [kinds, setKinds] = useState(pref.kinds || []) // [] = every file
-  const [more, setMore] = useState(pref.more || '')
-  const [skip, setSkip] = useState(pref.skip || '')
-  const [skipSystem, setSkipSystem] = useState(pref.skipSystem ?? false)
+  const [recursive, setRecursive] = useState(true)
+  const [kinds, setKinds] = useState([]) // [] = every file
+  const [more, setMore] = useState('')
+  const [skip, setSkip] = useState('')
+  const [skipSystem, setSkipSystem] = useState(false)
   const [drives, setDrives] = useState([])
-  useEffect(() => {
-    try {
-      localStorage.setItem(PREF, JSON.stringify({ recursive, kinds, more, skip, skipSystem }))
-    } catch { /* storage blocked: options simply reset next time */ }
-  }, [recursive, kinds, more, skip, skipSystem])
   useEffect(() => {
     api('/filescan/browse?path=').then((d) => setDrives(d.dirs || [])).catch(() => {})
   }, [])
@@ -65,21 +52,25 @@ export default function Scan() {
   const [open, setOpen] = useState(null)
   const [starting, setStarting] = useState(false)
 
-  const poll = useCallback(async () => {
+  // Ask the agent for the latest scan.
+  // onlyRunning = true is used once when the page opens: an old, finished result is NOT shown after a refresh,
+  // only a scan that is still running comes back.
+  const poll = useCallback(async (onlyRunning = false) => {
     try {
       const d = await api('/filescan/status')
-      setJob(d.job)
+      const hide = onlyRunning && d.job && d.job.status !== 'running'
+      setJob(hide ? null : d.job)
       setError('')
     } catch (e) {
       setError(e.message)
     }
   }, [])
 
-  // load the latest job once, then poll while one is running
-  useEffect(() => { poll() }, [poll])
+  // when the page opens: show only a running scan, then keep polling while one runs
+  useEffect(() => { poll(true) }, [poll])
   useEffect(() => {
     if (job?.status !== 'running') return undefined
-    const t = setInterval(poll, 1000)
+    const t = setInterval(() => poll(false), 1000)
     return () => clearInterval(t)
   }, [job?.status, poll])
 
@@ -101,7 +92,7 @@ export default function Scan() {
       await api('/filescan/start', { method: 'POST', body: { path: path.trim(), recursive, extensions, exclude } })
       setOpen(null)
       setPick(null)
-      await poll()
+      await poll(false)
     } catch (e) {
       toast(e.message, 'err')
     } finally {
@@ -117,7 +108,7 @@ export default function Scan() {
       await api('/software/rescan', { method: 'POST' })
       await api('/filescan/start', { method: 'POST', body: { path: '@pc', recursive: true, extensions: PC_TYPES, exclude: ['node_modules', '.git', 'WinSxS'] } })
       setOpen(null)
-      await poll()
+      await poll(false)
     } catch (e) {
       toast(e.message, 'err')
     } finally {
@@ -356,17 +347,7 @@ function Detail({ r }) {
         </tbody>
       </table>
 
-      {r.hidden.map((h, i) => (
-        <div key={i}>
-          <div className="toolbar" style={{ marginBottom: 6 }}>
-            <b>Hidden {KIND[h.kind] || h.kind}</b>
-            <span className="hint">{h.where} · {bytes(h.length)}{h.offset ? ` · at byte ${h.offset}` : ''}</span>
-            <Button size="sm" icon="fileText" onClick={() => copy(h.text, 'Hidden data')}>Copy</Button>
-          </div>
-          <pre className="mono" style={{ margin: 0, padding: 12, borderRadius: 10, border: '1px solid var(--line)', background: 'var(--input-bg)', maxHeight: 260, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{h.text}</pre>
-          {['pe', 'zip', 'binary', 'elf', 'pdf'].includes(h.kind) && <div className="hint">Binary data is shown as hex (first bytes). It is not saved or run.</div>}
-        </div>
-      ))}
+      {r.hidden.length > 0 && <HiddenScripts hidden={r.hidden} />}
       {r.note && <div className="hint">{r.note}</div>}
     </div>
   )

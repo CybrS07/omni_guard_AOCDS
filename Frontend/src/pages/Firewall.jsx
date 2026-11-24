@@ -141,7 +141,7 @@ export default function Firewall({ status }) {
   const loggingOn = fw.profiles.length > 0 && fw.profiles.every((p) => p.log_blocked)
   const alerts = alertData?.alerts || []
   const listening = snap?.snapshot?.network?.listening || []
-  const canEdit = fw.admin || fw.demo
+  const canEdit = fw.admin
   const listedKeys = new Set(listening.map((c) => `${protoOf(c.proto)}:${portOf(c.local)}`))
   const hiddenStopped = [...stopped].filter((k) => !listedKeys.has(k)) // blocked, but nothing listens any more
 
@@ -158,19 +158,13 @@ export default function Firewall({ status }) {
         </div>
       </div>
 
-      {!fw.admin && !fw.demo && (
+      {!fw.admin && (
         <div className="banner">
           <Icon name="lock" size={24} />
           <div>
             <b>Read-only: the agent is not elevated.</b>
             <div className="muted">Windows rejects rule changes unless the agent runs as Administrator. Install it as a service (scripts/install-service.ps1) or start it from an elevated terminal.</div>
           </div>
-        </div>
-      )}
-      {fw.demo && (
-        <div className="banner info">
-          <Icon name="server" size={24} />
-          <div><b>Demo firewall.</b> <span className="muted">This agent is not running on Windows, so rules are kept in memory only.</span></div>
         </div>
       )}
 
@@ -218,7 +212,7 @@ export default function Firewall({ status }) {
                     <tr key={r.name}>
                       <td>
                         <label className="switch" title={r.enabled ? 'Disable' : 'Enable'}>
-                          <input type="checkbox" checked={r.enabled} disabled={busyRule === r.name || (!fw.admin && !fw.demo)} onChange={() => toggle(r)} />
+                          <input type="checkbox" checked={r.enabled} disabled={busyRule === r.name || (!fw.admin)} onChange={() => toggle(r)} />
                           <span />
                         </label>
                       </td>
@@ -257,7 +251,7 @@ export default function Firewall({ status }) {
         </div>
 
         <div className="stack">
-          <NewRuleForm disabled={!fw.admin && !fw.demo} onCreated={() => reload()} />
+          <NewRuleForm disabled={!fw.admin} onCreated={() => reload()} />
 
           {/* ---- alarming activity ---- */}
           <div className="panel">
@@ -447,7 +441,7 @@ function NewRuleForm({ disabled, onCreated }) {
         {found && (
           <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
             <div className="hint">
-              {found.domain} uses {found.ips.length} address{found.ips.length === 1 ? '' : 'es'}{found.sample ? ' (sample data: this demo machine has no DNS)' : ''}. Click an address to leave it out.
+              {found.domain} uses {found.ips.length} address{found.ips.length === 1 ? '' : 'es'}. Click an address to leave it out.
             </div>
             <div className="chip-row">
               {found.ips.map((ip) => (

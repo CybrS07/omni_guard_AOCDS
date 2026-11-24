@@ -98,10 +98,10 @@ function HashCheck({ copy }) {
       <div className="toolbar">
         <input className="input mono" style={{ flex: 1, minWidth: 260 }} placeholder="SHA-256 (64 characters)" aria-label="SHA-256 hash" value={hash} onChange={(e) => setHash(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && check()} />
         <Button variant="primary" busy={busy} onClick={() => check()}>Check hash</Button>
-        <label className="btn btn-outline" style={{ cursor: 'pointer' }}>
+        <Button component="label">
           Hash a file…
           <input type="file" hidden onChange={pickFile} />
-        </label>
+        </Button>
       </div>
       <div className="hint" style={{ marginTop: 6 }}>"Hash a file" calculates the fingerprint inside your browser; the file itself is never uploaded.</div>
       {err && <div className="form-error" role="alert">{err}</div>}

@@ -31,6 +31,7 @@ struct Slow {
     conns_seq: u64,
 }
 
+/// Starts the two background threads that collect system data: one slow for sensors, one fast for everything else.
 pub fn spawn(st: Arc<AppState>) {
     let slow = Arc::new(Mutex::new(Slow::default()));
     let s2 = slow.clone();
@@ -46,6 +47,7 @@ pub fn spawn(st: Arc<AppState>) {
 
 // ------------------------------------------------------------------ slow sensors
 
+/// Loop for the slow sensors: every 3 seconds it reads connections, GPU, temperature and IP addresses.
 fn slow_loop(slow: Arc<Mutex<Slow>>) {
     let mut n: u64 = 0;
     loop {
@@ -70,6 +72,7 @@ fn slow_loop(slow: Arc<Mutex<Slow>>) {
     }
 }
 
+/// Lists this computer's network addresses, skipping loopback addresses such as 127.0.0.1.
 fn read_ips() -> Vec<LocalIp> {
     local_ip_address::list_afinet_netifas()
         .unwrap_or_default()
@@ -79,6 +82,7 @@ fn read_ips() -> Vec<LocalIp> {
         .collect()
 }
 
+/// Reads the current network connections using netstat on Windows (or ss on Linux).
 fn read_connections() -> Vec<RawConn> {
     if cfg!(windows) {
         let Some(o) = run("netstat", &["-ano"], 10) else { return vec![] };
@@ -125,6 +129,7 @@ fn parse_ss_line(line: &str) -> Option<RawConn> {
     })
 }
 
+/// Reads the GPU name and load, trying NVIDIA's tool first and then Windows performance counters.
 fn read_gpu() -> Option<GpuInfo> {
     if let Some(o) = run(
         "nvidia-smi",
@@ -167,6 +172,7 @@ $u=(Get-Counter '\GPU Engine(*engtype_3D)\Utilization Percentage' -ErrorAction S
     None
 }
 
+/// Reads a motherboard temperature sensor through PowerShell on Windows and returns the highest sensible reading.
 fn read_acpi_temp() -> Option<f32> {
     let script = "Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction SilentlyContinue | ForEach-Object { [math]::Round($_.CurrentTemperature/10-273.15,1) }";
     let o = powershell(script, &[], 10)?;
@@ -179,6 +185,7 @@ fn read_acpi_temp() -> Option<f32> {
 
 // ------------------------------------------------------------------ fast loop
 
+/// Counts how many times in a row a condition has been true; returns true once the count reaches the needed number.
 fn sustained(map: &mut HashMap<String, u32>, key: &str, cond: bool, needed: u32) -> bool {
     if cond {
         let c = map.entry(key.to_string()).or_insert(0);
@@ -190,6 +197,7 @@ fn sustained(map: &mut HashMap<String, u32>, key: &str, cond: bool, needed: u32)
     }
 }
 
+/// Main loop that runs every second: gathers CPU, memory, disk, network and app data and publishes one snapshot.
 fn fast_loop(st: Arc<AppState>, slow: Arc<Mutex<Slow>>) {
     let cfg = st.cfg.clone();
     let mut sys = System::new_all();
@@ -453,6 +461,7 @@ fn fast_loop(st: Arc<AppState>, slow: Arc<Mutex<Slow>>) {
     }
 }
 
+/// Turns the raw connection list into the network view, raising alerts for suspicious ports and very busy addresses.
 fn analyse_connections(st: &AppState, conns: &[RawConn], pid_name: &HashMap<u32, String>) -> NetInfo {
     let sus: HashSet<u16> = st.cfg.suspicious_ports.iter().copied().collect();
     let name_of = |pid: u32| pid_name.get(&pid).cloned().unwrap_or_else(|| if pid == 0 { "-".into() } else { format!("pid {pid}") });

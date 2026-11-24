@@ -9,6 +9,7 @@ import Downloads from './pages/Downloads.jsx'
 import Firewall from './pages/Firewall.jsx'
 import Scan from './pages/Scan.jsx'
 import Logs from './pages/Logs.jsx'
+import Registry from './pages/Registry.jsx'
 import Settings from './pages/Settings.jsx'
 import System from './pages/System.jsx'
 import ThemeToggle from './theme/ThemeToggle.jsx'
@@ -18,6 +19,7 @@ const NAV = [
   { to: '/firewall', label: 'Firewall', icon: 'shield' },
   { to: '/downloads', label: 'Downloads', icon: 'download' },
   { to: '/scan', label: 'Scan', icon: 'folder' },
+  { to: '/registry', label: 'Registry', icon: 'database' },
   { to: '/logs', label: 'Logs', icon: 'fileText' },
   { to: '/system', label: 'System', icon: 'box' },
   { to: '/settings', label: 'Settings', icon: 'server' },
@@ -69,6 +71,7 @@ export default function App() {
             <Route path="/firewall" element={<Firewall status={status} />} />
             <Route path="/downloads" element={<Downloads />} />
             <Route path="/scan" element={<Scan />} />
+            <Route path="/registry" element={<Registry />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/system" element={<System />} />
             <Route path="/settings" element={<Settings status={status} />} />

@@ -1,12 +1,14 @@
 """Face-scan API for the Omni Guard AOCDS frontend (127.0.0.1 only).
 Run from backend/scan:   uv run uvicorn server:app --host 127.0.0.1 --port 8000
 The dashboard reaches it through the /scan-api proxy, so it needs no CORS access."""
+import hmac
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -15,7 +17,42 @@ from intel import router as intel_router
 from filescan import router as filescan_router
 from domaincheck import router as domain_router
 
-app = FastAPI(title="Omni Guard AOCDS Scan API")
+app = FastAPI(title="Omni Guard AOCDS Scan API", docs_url=None, redoc_url=None, openapi_url=None)
+
+
+# ---------------------------------------------------------------- stealth: only callers with the secret get an answer
+def _token_files() -> list[Path]:
+    """Where the Rust agent keeps the shared secret (api-token.txt)."""
+    files = []
+    if os.environ.get("SOC_TOKEN_FILE"):
+        files.append(Path(os.environ["SOC_TOKEN_FILE"]))
+    if os.environ.get("SOC_SCAN_DATA"):
+        files.append(Path(os.environ["SOC_SCAN_DATA"]).parent / "api-token.txt")
+    files.append(Path(__file__).resolve().parent.parent / "data" / "api-token.txt")
+    files.append(Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "SocMonitor" / "api-token.txt")
+    return files
+
+
+def _read_token() -> str:
+    for f in _token_files():
+        try:
+            text = f.read_text(encoding="utf-8").strip()
+            if text:
+                return text
+        except OSError:
+            continue
+    return ""
+
+
+@app.middleware("http")
+async def secret_only(request: Request, call_next):
+    """Wrong or missing secret -> an empty 404, like a closed door. Nothing about this program is revealed."""
+    secret = _read_token()
+    given = request.headers.get("x-soc-token", "")
+    if not secret or not hmac.compare_digest(given.encode(), secret.encode()):
+        return Response(status_code=404)
+    return await call_next(request)
+
 # only the local dashboard may call this from a browser
 app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
                    allow_methods=["*"], allow_headers=["*"])

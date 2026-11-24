@@ -86,7 +86,7 @@ export default function Settings({ status }) {
           <div className="panel-head"><h2><Icon name="server" size={20} /> About this agent</h2></div>
           <dl style={{ margin: 0 }}>
             <Row k="Version">Omni Guard AOCDS agent v{status.version}</Row>
-            <Row k="Privileges"><span className={`pill flat ${status.admin ? 'ok' : 'warn'}`}>{status.admin ? 'Elevated (administrator)' : 'Not elevated'}</span> {status.demo && <span className="pill flat warn">Demo data</span>}</Row>
+            <Row k="Privileges"><span className={`pill flat ${status.admin ? 'ok' : 'warn'}`}>{status.admin ? 'Elevated (administrator)' : 'Not elevated'}</span></Row>
             <Row k="Log folder"><span className="mono">{status.log_dir}</span></Row>
             <Row k="Watched folders">{dl ? (dl.watching?.length ? dl.watching.map((w) => <div key={w} className="mono">{w}</div>) : '-') : <Bars />}</Row>
           </dl>

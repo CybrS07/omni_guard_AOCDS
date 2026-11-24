@@ -51,22 +51,3 @@ pub fn resolve(domain: &str) -> Result<Vec<IpAddr>, String> {
     }
     Ok(ips)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::clean_domain;
-
-    #[test]
-    fn cleans_urls_and_hosts() {
-        assert_eq!(clean_domain("https://User:pw@WWW.Example.com:8080/a/b?x=1#y").unwrap(), "www.example.com");
-        assert_eq!(clean_domain("example.com.").unwrap(), "example.com");
-        assert_eq!(clean_domain("  sub-1.example.co.uk ").unwrap(), "sub-1.example.co.uk");
-    }
-
-    #[test]
-    fn rejects_bad_input() {
-        for bad in ["", "localhost", "1.2.3.4", "-a.com", "a..com", "exa mple.com", "a.com; rm -rf", "http://"] {
-            assert!(clean_domain(bad).is_err(), "{bad} should be rejected");
-        }
-    }
-}

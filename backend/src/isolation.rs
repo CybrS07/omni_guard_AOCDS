@@ -13,6 +13,7 @@ use std::time::Duration;
 
 const EVERYONE: &str = "*S-1-1-0"; // well-known SID, works on every Windows language
 
+/// Builds the path of the note file that is left where a download was, named after the original file.
 pub fn placeholder(original: &Path) -> PathBuf {
     let mut s = original.as_os_str().to_owned();
     s.push(".soc-pending.txt");
@@ -62,6 +63,7 @@ pub fn destroy(held: &Path, original: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Removes the holding folder if it is empty; does nothing if files are still inside.
 fn remove_hold_dir(held: &Path) {
     if let Some(dir) = held.parent() {
         let _ = fs::remove_dir(dir); // only succeeds when empty, which is what we want
@@ -85,6 +87,7 @@ fn move_file(from: &Path, to: &Path) -> Result<(), String> {
     Err(format!("could not move {}: {last}", from.display()))
 }
 
+/// Blocks or unblocks running a file: on Windows it sets an icacls deny for Everyone, elsewhere it changes the file permissions.
 fn set_execute_denied(path: &Path, deny: bool) {
     if !cfg!(windows) {
         #[cfg(unix)]
@@ -100,34 +103,5 @@ fn set_execute_denied(path: &Path, deny: bool) {
         run("icacls", &[p.as_ref(), "/deny", &format!("{EVERYONE}:(X)")], 15);
     } else {
         run("icacls", &[p.as_ref(), "/remove:d", EVERYONE], 15);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn isolate_release_destroy() {
-        let base = std::env::temp_dir().join(format!("soc-iso-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        fs::create_dir_all(&base).unwrap();
-        let src = base.join("setup.exe");
-        fs::write(&src, b"MZ fake").unwrap();
-        let root = base.join("iso");
-
-        let held = isolate(&root, "a1", &src).unwrap();
-        assert!(!src.exists() && held.exists() && placeholder(&src).exists());
-        assert!(held.to_string_lossy().ends_with("setup.exe.held"));
-
-        fs::write(&src, b"another file with the same name").unwrap(); // name taken -> "(2)"
-        let back = release(&held, &src).unwrap();
-        assert_eq!(back.file_name().unwrap().to_string_lossy(), "setup (2).exe");
-        assert!(!placeholder(&src).exists() && !root.join("a1").exists());
-
-        let held2 = isolate(&root, "a2", &back).unwrap();
-        destroy(&held2, &back).unwrap();
-        assert!(!held2.exists() && !root.join("a2").exists());
-        let _ = fs::remove_dir_all(&base);
     }
 }

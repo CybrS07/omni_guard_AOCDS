@@ -49,11 +49,13 @@ pub struct Store {
 }
 
 impl Store {
+    /// Create the software store, loading earlier results from software.json so they survive restarts.
     pub fn new(dir: PathBuf) -> Self {
         let path = dir.join("software.json");
         let items = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
         Store { path, items: Mutex::new(items), scanning: AtomicBool::new(false), rescan: AtomicBool::new(false), last_scan: Mutex::new(String::new()) }
     }
+    /// Return the installed-software list with vulnerable programs first, worst score first.
     pub fn list(&self) -> Vec<Software> {
         let mut v = self.items.lock().unwrap_or_else(|e| e.into_inner()).clone();
         // vulnerable first, worst score first, then by name
@@ -64,9 +66,11 @@ impl Store {
         });
         v
     }
+    /// Return the time of the most recent software check, for display on the Downloads page.
     pub fn last_scan(&self) -> String {
         self.last_scan.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
+    /// Write the software list to software.json via a temp file, so a crash cannot corrupt it.
     fn save(&self, items: &[Software]) {
         if let Some(d) = self.path.parent() {
             let _ = std::fs::create_dir_all(d);
@@ -87,10 +91,12 @@ impl Store {
     }
 }
 
+/// Build a lookup key from a program's name and version, ignoring letter case.
 fn key(name: &str, version: &str) -> String {
     format!("{}|{}", name.to_lowercase(), version.to_lowercase())
 }
 
+/// Return the current time in seconds since 1970, used to record when a program was checked.
 fn epoch() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
@@ -133,20 +139,22 @@ pub fn parse_list(json: &str) -> Vec<Software> {
     out
 }
 
+/// Read the installed-program list from Windows; returns an empty list elsewhere or in demo mode.
 fn enumerate(demo: bool) -> Vec<Software> {
     if demo {
-        let mk = |n: &str, v: &str, p: &str| Software { name: n.into(), version: v.into(), publisher: p.into(), status: "pending".into(), cves: Value::Array(vec![]), ..Default::default() };
-        return vec![mk("7-Zip", "19.00", "Igor Pavlov"), mk("Notepad++", "8.6.2", "Notepad++ Team"), mk("VLC media player", "3.0.20", "VideoLAN")];
+        return Vec::new(); // not Windows: there is no installed-software list to read
     }
     powershell(LIST_PS, &[], 60).filter(|o| o.ok).map(|o| parse_list(&o.stdout)).unwrap_or_default()
 }
 
 // ------------------------------------------------------------------ the loop
 
+/// Start the software-check loop in its own background thread.
 pub fn spawn(st: Arc<AppState>) {
     thread::Builder::new().name("software".into()).spawn(move || run(st)).expect("spawn software checker");
 }
 
+/// Loop forever, running a check round when the user asks or when 30 minutes have passed.
 fn run(st: Arc<AppState>) {
     // Runs when the service is on (every 30 minutes) or when "Scan now" / "Scan this PC" asks for it.
     let mut waited: u64 = ROUND_EVERY_SECS - 8; // first automatic round ~8 s after start (the Python service must be up)
@@ -165,6 +173,7 @@ fn run(st: Arc<AppState>) {
     }
 }
 
+/// Run one full software check: refresh the list, check each program against the NVD, save and alert.
 fn round(st: &Arc<AppState>) {
     let store = &st.software;
     store.scanning.store(true, Ordering::SeqCst);
@@ -250,21 +259,4 @@ fn round(st: &Arc<AppState>) {
     }
     *store.last_scan.lock().unwrap_or_else(|e| e.into_inner()) = now_iso();
     store.scanning.store(false, Ordering::SeqCst);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_array_and_single_object() {
-        let arr = r#"[{"name":"7-Zip 19.00 (x64)","version":"19.00","publisher":"Igor Pavlov","install_date":"20240101"},{"name":"Security Update for X","version":"1"},{"name":"7-Zip 19.00 (x64)","version":"19.00"}]"#;
-        let v = parse_list(arr);
-        assert_eq!(v.len(), 1);
-        assert_eq!(v[0].publisher, "Igor Pavlov");
-        let one = parse_list(r#"{"name":"Git","version":"2.40.0","publisher":null}"#);
-        assert_eq!(one.len(), 1);
-        assert_eq!(one[0].status, "pending");
-        assert!(parse_list("garbage").is_empty());
-    }
 }

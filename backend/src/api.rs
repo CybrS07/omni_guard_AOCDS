@@ -2,7 +2,7 @@ use axum::{
     extract::{Query, Request, State},
     http::{header, HeaderValue, Method, StatusCode},
     middleware::{self, Next},
-    response::{IntoResponse, Response},
+    response::Response,
     routing::{get, post},
     Json, Router,
 };
@@ -19,10 +19,12 @@ use crate::util::ct_eq;
 type Shared = Arc<AppState>;
 type ApiResult = Result<Json<Value>, (StatusCode, Json<Value>)>;
 
+/// Builds a standard error reply: an HTTP status code plus a small JSON message like {'error': '...'}.
 fn fail(code: StatusCode, msg: impl Into<String>) -> (StatusCode, Json<Value>) {
     (code, Json(json!({ "error": msg.into() })))
 }
 
+/// Builds the web router: connects each /api web address to the function that answers it, plus the security checks.
 pub fn router(st: Shared) -> Router {
     let origins: Vec<HeaderValue> = st
         .cfg
@@ -59,6 +61,7 @@ pub fn router(st: Shared) -> Router {
         .route("/api/dns/resolve", get(dns_resolve))
         .route("/api/downloads", get(downloads_list))
         .route("/api/downloads/decision", post(downloads_decide))
+        .route("/api/downloads/remove", post(downloads_remove))
         .route("/api/filescan/browse", get(filescan_browse))
         .route("/api/filescan/start", post(filescan_start))
         .route("/api/filescan/status", get(filescan_status))
@@ -76,6 +79,15 @@ pub fn router(st: Shared) -> Router {
         .route("/api/integrity/check", post(integrity_check))
         .route("/api/software", get(software_list))
         .route("/api/software/rescan", post(software_rescan))
+        .route("/api/registry", get(registry_view))
+        .route("/api/registry/setup", post(registry_setup))
+        .route("/api/registry/rescan", post(registry_rescan))
+        .route("/api/registry/delete", post(registry_delete))
+        .route("/api/registry/reset", post(registry_reset))
+        .route("/api/registry/trust", post(registry_trust))
+        .route("/api/registry/point", post(registry_point))
+        .route("/api/registry/windows-point", post(registry_windows_point))
+        .route("/api/registry/restore", post(registry_restore))
         .layer(middleware::from_fn_with_state(st.clone(), guard))
         .layer(cors) // outermost so CORS preflights are answered before the guard runs
         .with_state(st)
@@ -83,17 +95,25 @@ pub fn router(st: Shared) -> Router {
 
 /// 1) Host header must be loopback (defeats DNS-rebinding from web pages).
 /// 2) Every call except /api/health needs the per-install token (X-SOC-Token).
+/// An empty 404 with no body and no extra headers.
+fn silent_not_found() -> Response {
+    let mut r = Response::new(axum::body::Body::empty());
+    *r.status_mut() = StatusCode::NOT_FOUND;
+    r
+}
+
+/// Security check that runs before every request: it only allows requests from this computer with the right token.
 async fn guard(State(st): State<Shared>, req: Request, next: Next) -> Response {
     let host = req.headers().get(header::HOST).and_then(|h| h.to_str().ok()).unwrap_or("");
     let hostname = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
+    // Stealth: a stranger (wrong host or no secret) gets an empty 404, exactly like a closed door.
+    // No JSON, no error text and no name of the program, so a port scanner learns nothing.
     if !matches!(hostname, "127.0.0.1" | "localhost" | "[::1]") {
-        return fail(StatusCode::FORBIDDEN, "host not allowed").into_response();
+        return silent_not_found();
     }
-    if req.uri().path() != "/api/health" {
-        let tok = req.headers().get("x-soc-token").and_then(|v| v.to_str().ok()).unwrap_or("");
-        if !ct_eq(tok, &st.token) {
-            return fail(StatusCode::UNAUTHORIZED, "missing or wrong API token").into_response();
-        }
+    let tok = req.headers().get("x-soc-token").and_then(|v| v.to_str().ok()).unwrap_or("");
+    if !ct_eq(tok, &st.token) {
+        return silent_not_found();
     }
     next.run(req).await
 }
@@ -131,6 +151,7 @@ async fn index() -> Json<Value> {
     }))
 }
 
+/// Returns the saved host information (OS, hardware, accounts and so on) as JSON.
 async fn system_info(State(st): State<Shared>) -> Json<Value> {
     let s = st.system.read().unwrap_or_else(|e| e.into_inner()).clone();
     Json(json!(s))
@@ -180,10 +201,12 @@ async fn snapshot(State(st): State<Shared>, Query(q): Query<SnapQ>) -> ApiResult
     })))
 }
 
+/// Simple health check: answers ok so anyone can confirm the agent is running.
 async fn health() -> Json<Value> {
     Json(json!({ "ok": true }))
 }
 
+/// Returns the agent's version, admin status, alert limits and the folders and ports it watches.
 async fn status(State(st): State<Shared>) -> Json<Value> {
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
@@ -205,6 +228,7 @@ struct MetricsQ {
     points: Option<usize>,
 }
 
+/// Returns the latest live readings and recent history; the number of history points is kept between 10 and 300.
 async fn metrics(State(st): State<Shared>, Query(q): Query<MetricsQ>) -> Json<Value> {
     let n = q.points.unwrap_or(120).clamp(10, 300);
     let snap = st.snapshot.read().unwrap_or_else(|e| e.into_inner()).clone();
@@ -220,6 +244,7 @@ struct AlertsQ {
     category: Option<String>,
 }
 
+/// Returns the newest alerts, optionally filtered to the categories named in the request.
 async fn alerts(State(st): State<Shared>, Query(q): Query<AlertsQ>) -> Json<Value> {
     let a = st.alerts.read().unwrap_or_else(|e| e.into_inner());
     let list: Vec<_> = a
@@ -238,6 +263,7 @@ struct LogsQ {
     q: Option<String>,
 }
 
+/// Reads recent log lines of the requested kind (or all kinds) after checking that the kind name is known.
 async fn logs(State(st): State<Shared>, Query(q): Query<LogsQ>) -> ApiResult {
     if let Some(k) = &q.kind {
         if !k.is_empty() && k != "all" && !KINDS.contains(&k.as_str()) {
@@ -255,6 +281,7 @@ async fn logs(State(st): State<Shared>, Query(q): Query<LogsQ>) -> ApiResult {
 
 // ------------------------------------------------------------------ firewall
 
+/// Returns the current firewall profiles and rules as JSON.
 async fn fw_list(State(st): State<Shared>) -> Json<Value> {
     let (profiles, rules) = st.firewall.snapshot();
     Json(json!({
@@ -265,23 +292,27 @@ async fn fw_list(State(st): State<Shared>) -> Json<Value> {
     }))
 }
 
+/// Runs slow work on a separate thread so the web server stays responsive, and turns a failure into an error reply.
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, (StatusCode, Json<Value>)> {
     tokio::task::spawn_blocking(f)
         .await
         .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "task failed"))
 }
 
+/// Re-reads the firewall rules from Windows, then returns the updated list.
 async fn fw_refresh(State(st): State<Shared>) -> ApiResult {
     let s = st.clone();
     blocking(move || s.firewall.refresh()).await?.map_err(|e| fail(StatusCode::BAD_GATEWAY, e))?;
     Ok(fw_list_value(&st))
 }
 
+/// Gets the current firewall profiles and rules in the same JSON shape the firewall endpoints use.
 fn fw_list_value(st: &Shared) -> Json<Value> {
     let (profiles, rules) = st.firewall.snapshot();
     Json(json!({ "demo": st.firewall.is_demo(), "admin": st.is_admin, "profiles": profiles, "rules": rules }))
 }
 
+/// Checks that the agent has administrator rights before a firewall change; demo mode always passes.
 fn need_admin(st: &Shared) -> Result<(), (StatusCode, Json<Value>)> {
     if st.firewall.is_demo() || st.is_admin {
         Ok(())
@@ -293,6 +324,7 @@ fn need_admin(st: &Shared) -> Result<(), (StatusCode, Json<Value>)> {
     }
 }
 
+/// Adds a new firewall rule after the admin check, then writes an entry to the permissions log.
 async fn fw_add(State(st): State<Shared>, Json(req): Json<NewRule>) -> ApiResult {
     need_admin(&st)?;
     let s = st.clone();
@@ -318,6 +350,7 @@ struct Toggle {
     enabled: bool,
 }
 
+/// Turns one firewall rule on or off by name, then logs the change.
 async fn fw_toggle(State(st): State<Shared>, Json(t): Json<Toggle>) -> ApiResult {
     need_admin(&st)?;
     let (s, name, en) = (st.clone(), t.name.clone(), t.enabled);
@@ -331,6 +364,7 @@ struct NameOnly {
     name: String,
 }
 
+/// Deletes one firewall rule by name, then logs the deletion.
 async fn fw_delete(State(st): State<Shared>, Json(t): Json<NameOnly>) -> ApiResult {
     need_admin(&st)?;
     let (s, name) = (st.clone(), t.name.clone());
@@ -344,6 +378,7 @@ struct IpBody {
     ip: String,
 }
 
+/// Blocks all inbound and outbound traffic for one IP address, then logs it.
 async fn fw_block(State(st): State<Shared>, Json(b): Json<IpBody>) -> ApiResult {
     need_admin(&st)?;
     let (s, ip) = (st.clone(), b.ip.clone());
@@ -352,6 +387,7 @@ async fn fw_block(State(st): State<Shared>, Json(b): Json<IpBody>) -> ApiResult 
     Ok(Json(json!({ "created": made })))
 }
 
+/// Turns on logging of dropped firewall packets, then returns the updated firewall list.
 async fn fw_logging(State(st): State<Shared>) -> ApiResult {
     need_admin(&st)?;
     let s = st.clone();
@@ -366,6 +402,7 @@ struct PortBody {
     proto: String,
 }
 
+/// Checks a port number and protocol from a request; refuses port 0 and the agent's own API port.
 fn port_args(st: &Shared, b: &PortBody) -> Result<&'static str, (StatusCode, Json<Value>)> {
     let proto = crate::ports::parse_proto(&b.proto).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
     if b.port == 0 {
@@ -377,6 +414,7 @@ fn port_args(st: &Shared, b: &PortBody) -> Result<&'static str, (StatusCode, Jso
     Ok(proto)
 }
 
+/// Blocks inbound traffic to a listening port; this can be undone with the start endpoint.
 async fn fw_port_stop(State(st): State<Shared>, Json(b): Json<PortBody>) -> ApiResult {
     need_admin(&st)?;
     let proto = port_args(&st, &b)?;
@@ -386,6 +424,7 @@ async fn fw_port_stop(State(st): State<Shared>, Json(b): Json<PortBody>) -> ApiR
     Ok(fw_list_value(&st))
 }
 
+/// Removes the inbound block from a port that was stopped earlier.
 async fn fw_port_start(State(st): State<Shared>, Json(b): Json<PortBody>) -> ApiResult {
     need_admin(&st)?;
     let proto = port_args(&st, &b)?;
@@ -406,6 +445,7 @@ struct EventsQ {
     q: Option<String>,
 }
 
+/// Searches the Windows event logs using the filters in the request and returns the matching records.
 async fn events(State(st): State<Shared>, Query(p): Query<EventsQ>) -> ApiResult {
     let query = crate::events::Query::parse(p.log.as_deref(), p.limit, p.level.as_deref(), p.id.as_deref(), p.q.as_deref())
         .map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
@@ -423,7 +463,8 @@ struct DnsQ {
     domain: String,
 }
 
-async fn dns_resolve(State(st): State<Shared>, Query(p): Query<DnsQ>) -> ApiResult {
+/// Looks up the IP addresses behind a domain name, which helps when writing firewall block rules.
+async fn dns_resolve(State(_st): State<Shared>, Query(p): Query<DnsQ>) -> ApiResult {
     let domain = crate::dns::clean_domain(&p.domain).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
     let d = domain.clone();
     let found = blocking(move || crate::dns::resolve(&d)).await?;
@@ -432,14 +473,13 @@ async fn dns_resolve(State(st): State<Shared>, Query(p): Query<DnsQ>) -> ApiResu
             let ips: Vec<String> = ips.iter().map(|i| i.to_string()).collect();
             Ok(Json(json!({ "domain": domain, "ips": ips, "count": ips.len(), "sample": false })))
         }
-        // demo machines may have no internet: show documentation-range sample addresses
-        Err(_) if st.demo => Ok(Json(json!({ "domain": domain, "ips": ["203.0.113.10", "203.0.113.11", "2001:db8::10"], "count": 3, "sample": true }))),
         Err(e) => Err(fail(StatusCode::BAD_GATEWAY, e)),
     }
 }
 
 // ------------------------------------------------------------------ downloads (isolation + verdicts)
 
+/// Lists the downloads being held or already checked, plus the folders being watched.
 async fn downloads_list(State(st): State<Shared>) -> ApiResult {
     let watching: Vec<String> = crate::downloads::watch_dirs(&st.cfg).iter().map(|p| p.display().to_string()).collect();
     Ok(Json(json!({ "enabled": crate::settings::enabled("downloads"), "watching": watching, "items": st.downloads.list() })))
@@ -451,6 +491,7 @@ struct DecisionBody {
     allow: bool,
 }
 
+/// Records the user's decision on a held download: keep it, or remove it for good.
 async fn downloads_decide(State(st): State<Shared>, Json(b): Json<DecisionBody>) -> ApiResult {
     let s = st.clone();
     let item = blocking(move || crate::downloads::resolve(&s, &b.id, b.allow, "dashboard")).await?.map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
@@ -467,6 +508,7 @@ struct BrowseQ {
     files: bool,
 }
 
+/// Lists the folders (or files) at a given path so the user can choose what to scan.
 async fn filescan_browse(Query(q): Query<BrowseQ>) -> ApiResult {
     let v = blocking(move || crate::filescan::browse(&q.path, q.files)).await?.map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(v))
@@ -484,10 +526,12 @@ struct StartBody {
     #[serde(default)]
     exclude: Vec<String>,
 }
+/// Default value for a true/false setting: returns true.
 fn yes() -> bool {
     true
 }
 
+/// Starts a background scan of a folder, applying the extension and folder filters from the request.
 async fn filescan_start(State(st): State<Shared>, Json(b): Json<StartBody>) -> ApiResult {
     let extensions = b.extensions.iter().map(|e| e.trim().trim_start_matches('*').trim_start_matches('.').to_lowercase()).filter(|e| !e.is_empty()).collect();
     let opts = crate::filescan::Opts { recursive: b.recursive, extensions, exclude: b.exclude };
@@ -500,10 +544,12 @@ struct StatusQ {
     id: Option<String>,
 }
 
+/// Returns the progress or result of one folder scan, or of all scans when no id is given.
 async fn filescan_status(State(st): State<Shared>, Query(q): Query<StatusQ>) -> Json<Value> {
     Json(json!({ "job": st.filescan.status(q.id.as_deref()) }))
 }
 
+/// Returns whether folder monitoring is turned on, which folders it watches and the items it found.
 async fn filescan_monitor(State(st): State<Shared>) -> Json<Value> {
     let watching: Vec<String> = crate::downloads::watch_dirs(&st.cfg).iter().map(|p| p.display().to_string()).collect();
     Json(json!({ "enabled": crate::settings::enabled("filescan"), "watching": watching, "items": st.filescan.monitor_items() }))
@@ -514,12 +560,14 @@ struct CancelBody {
     id: String,
 }
 
+/// Asks a running folder scan to stop, and reports whether that scan was found.
 async fn filescan_cancel(State(st): State<Shared>, Json(b): Json<CancelBody>) -> ApiResult {
     Ok(Json(json!({ "cancelled": st.filescan.cancel(&b.id) })))
 }
 
 // ------------------------------------------------------------------ firewall clear, traffic watch, settings, services, integrity
 
+/// Removes all firewall rules this app created, then logs how many were removed.
 async fn fw_clear(State(st): State<Shared>) -> ApiResult {
     need_admin(&st)?;
     let s = st.clone();
@@ -528,10 +576,12 @@ async fn fw_clear(State(st): State<Shared>) -> ApiResult {
     Ok(Json(json!({ "removed": n })))
 }
 
+/// Returns the current network traffic watch results and whether that watch is turned on.
 async fn netwatch_list() -> Json<Value> {
     Json(json!({ "items": crate::netwatch::snapshot(), "enabled": crate::settings::enabled("netwatch") }))
 }
 
+/// Returns the current settings: watched folders, admin status, version and data locations.
 async fn settings_get(State(st): State<Shared>) -> Json<Value> {
     let dirs: Vec<String> = crate::downloads::watch_dirs(&st.cfg).iter().map(|p| p.display().to_string()).collect();
     Json(json!({ "watch_dirs": dirs, "custom_dirs": crate::settings::is_custom(), "admin": st.is_admin, "demo": st.demo, "version": env!("CARGO_PKG_VERSION"), "log_dir": st.logger.dir().display().to_string(), "data_dir": st.cfg.data_dir }))
@@ -544,6 +594,7 @@ struct DirBody {
     path: String,
 }
 
+/// Adds, removes or changes a watched folder as requested, then returns the updated settings.
 async fn settings_dirs(State(st): State<Shared>, Json(b): Json<DirBody>) -> ApiResult {
     let current = crate::downloads::watch_dirs(&st.cfg);
     crate::settings::change_dirs(current, &b.action, &b.path).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
@@ -552,14 +603,17 @@ async fn settings_dirs(State(st): State<Shared>, Json(b): Json<DirBody>) -> ApiR
 }
 
 trait PipeOk {
+    /// Converts a value into an API result; this is the method that the PipeOk trait requires.
     fn pipe_ok(self) -> ApiResult;
 }
 impl PipeOk for Value {
+    /// Wraps the JSON value in a successful API result.
     fn pipe_ok(self) -> ApiResult {
         Ok(Json(self))
     }
 }
 
+/// Lists the agent's services and whether each is on, plus the status of the external Python scan service.
 async fn services_list(State(st): State<Shared>) -> Json<Value> {
     // the two parts that are not switched from here: the agent itself and the Python scan service
     let scan_up = crate::intel_client::get_ok(&st.cfg.intel_url, "/api/health");
@@ -579,6 +633,7 @@ struct SvcBody {
     autostart: Option<bool>,
 }
 
+/// Starts or stops a service and/or turns its autostart on or off, logging each change.
 async fn services_set(State(st): State<Shared>, Json(b): Json<SvcBody>) -> ApiResult {
     if let Some(on) = b.running {
         crate::settings::set_running(&b.name, on).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
@@ -591,6 +646,7 @@ async fn services_set(State(st): State<Shared>, Json(b): Json<SvcBody>) -> ApiRe
     Ok(Json(json!({ "services": crate::settings::list() })))
 }
 
+/// Returns the list of watched files and whether file integrity checking is turned on.
 async fn integrity_list(State(st): State<Shared>) -> Json<Value> {
     Json(json!({ "items": st.integrity.list(), "enabled": crate::settings::enabled("integrity") }))
 }
@@ -600,21 +656,25 @@ struct PathBody {
     path: String,
 }
 
+/// Adds a file or folder to integrity watching so later changes to it are detected.
 async fn integrity_add(State(st): State<Shared>, Json(b): Json<PathBody>) -> ApiResult {
     st.integrity.add(&st, &b.path).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(json!({ "ok": true })))
 }
 
+/// Stops watching a path for integrity changes and reports whether it was removed.
 async fn integrity_remove(State(st): State<Shared>, Json(b): Json<PathBody>) -> ApiResult {
     Ok(Json(json!({ "removed": st.integrity.remove(&st, &b.path) })))
 }
 
+/// Accepts the current state of a changed file as its new normal, so it stops being flagged.
 async fn integrity_accept(State(st): State<Shared>, Json(b): Json<PathBody>) -> ApiResult {
     let s = st.clone();
     blocking(move || s.integrity.rebaseline(&s, &b.path)).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
+/// Runs a full integrity check on every watched file now and returns the results.
 async fn integrity_check(State(st): State<Shared>) -> ApiResult {
     st.integrity.request_full();
     let s = st.clone();
@@ -624,6 +684,7 @@ async fn integrity_check(State(st): State<Shared>) -> ApiResult {
 
 // ------------------------------------------------------------------ installed software (NVD)
 
+/// Returns installed programs with their vulnerability status and scan information.
 async fn software_list(State(st): State<Shared>) -> Json<Value> {
     let items = st.software.list();
     let vulnerable = items.iter().filter(|s| s.status == "vulnerable").count();
@@ -637,8 +698,115 @@ async fn software_list(State(st): State<Shared>) -> Json<Value> {
     }))
 }
 
+/// Asks the software scanner to check installed programs again on its next run.
 async fn software_rescan(State(st): State<Shared>) -> Json<Value> {
     st.software.rescan.store(true, std::sync::atomic::Ordering::SeqCst);
     st.log("apps", "INFO", "SOFTWARE_SCAN requested from the dashboard");
     Json(json!({ "ok": true }))
+}
+
+// ------------------------------------------------------------------ registry guard
+
+/// Everything the Registry page needs: setup state, every entry with its verdict, restore points.
+async fn registry_view(State(st): State<Shared>) -> Json<Value> {
+    Json(st.registry.view(crate::settings::enabled("registry")))
+}
+
+#[derive(Deserialize)]
+struct RegistrySetup {
+    #[serde(default)]
+    publishers: Vec<String>,
+    #[serde(default)]
+    folders: Vec<String>,
+    #[serde(default)]
+    software: Vec<String>,
+    interval_mins: Option<u32>,
+    /// true on the very first run (the "initialize" form)
+    #[serde(default)]
+    initialize: bool,
+}
+
+/// Save what the user told us at first start (and later changes), then read the registry right away.
+async fn registry_setup(State(st): State<Shared>, Json(b): Json<RegistrySetup>) -> ApiResult {
+    st.registry.configure(b.publishers, b.folders, b.software, b.interval_mins, b.initialize);
+    st.registry.rescan.store(true, std::sync::atomic::Ordering::SeqCst);
+    st.log("access", "INFO", "REGISTRY_SETUP saved from the dashboard");
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// Ask the background thread to read the registry again.
+async fn registry_rescan(State(st): State<Shared>) -> Json<Value> {
+    st.registry.rescan.store(true, std::sync::atomic::Ordering::SeqCst);
+    Json(json!({ "ok": true }))
+}
+
+#[derive(Deserialize)]
+struct IdBody {
+    id: String,
+    #[serde(default)]
+    on: bool,
+}
+
+/// Delete one leftover (orphan) or unowned (malware) entry. A restore point is taken first.
+async fn registry_delete(State(st): State<Shared>, Json(b): Json<IdBody>) -> ApiResult {
+    let s = st.clone();
+    let id = b.id.clone();
+    let msg = blocking(move || s.registry.delete(&id)).await?.map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    st.log("access", "WARN", format!("REGISTRY_DELETE {} by the user", b.id));
+    st.registry.rescan.store(true, std::sync::atomic::Ordering::SeqCst);
+    Ok(Json(json!({ "ok": true, "message": msg })))
+}
+
+/// Put a changed Winlogon value back to the Windows default.
+async fn registry_reset(State(st): State<Shared>, Json(b): Json<IdBody>) -> ApiResult {
+    let s = st.clone();
+    let id = b.id.clone();
+    let msg = blocking(move || s.registry.reset(&id)).await?.map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    st.registry.rescan.store(true, std::sync::atomic::Ordering::SeqCst);
+    Ok(Json(json!({ "ok": true, "message": msg })))
+}
+
+/// "I know this entry, it is fine" (or take that back).
+async fn registry_trust(State(st): State<Shared>, Json(b): Json<IdBody>) -> ApiResult {
+    st.registry.set_trusted(&b.id, b.on);
+    st.registry.rescan.store(true, std::sync::atomic::Ordering::SeqCst);
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// Take a restore point now (the "manual" kind).
+async fn registry_point(State(st): State<Shared>) -> ApiResult {
+    let s = st.clone();
+    let p = blocking(move || s.registry.take_point("manual", "taken by the user", &[])).await?.map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(json!({ "ok": true, "point": p })))
+}
+
+/// Import a restore point back into the registry.
+async fn registry_restore(State(st): State<Shared>, Json(b): Json<IdBody>) -> ApiResult {
+    let s = st.clone();
+    let id = b.id.clone();
+    let n = blocking(move || s.registry.restore(&id)).await?.map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    st.log("access", "WARN", format!("REGISTRY_RESTORE {} ({n} keys)", b.id));
+    st.registry.rescan.store(true, std::sync::atomic::Ordering::SeqCst);
+    Ok(Json(json!({ "ok": true, "keys_restored": n })))
+}
+
+// ------------------------------------------------------------------ remove a download entry (and its file)
+
+#[derive(Deserialize)]
+struct RemoveBody {
+    id: String,
+}
+
+/// Delete the file (if it is still there) and forget the entry.
+async fn downloads_remove(State(st): State<Shared>, Json(b): Json<RemoveBody>) -> ApiResult {
+    let s = st.clone();
+    let message = blocking(move || crate::downloads::remove_entry(&s, &b.id)).await?.map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(json!({ "ok": true, "message": message })))
+}
+
+/// Ask Windows itself for a System Restore point (Windows allows one per 24 hours).
+async fn registry_windows_point(State(st): State<Shared>) -> ApiResult {
+    let s = st.clone();
+    let message = blocking(move || s.registry.windows_restore_point()).await?.map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(json!({ "ok": true, "message": message })))
 }

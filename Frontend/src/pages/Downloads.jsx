@@ -52,6 +52,22 @@ export default function Downloads() {
     }
   }
 
+  // Delete the file (if still there) and forget the entry
+  const [removing, setRemoving] = useState(null)
+  const removeEntry = async () => {
+    setBusy(true)
+    try {
+      const answer = await api('/downloads/remove', { method: 'POST', body: { id: removing.id } })
+      toast(answer.message)
+      reload()
+    } catch (e) {
+      toast(e.message, 'err')
+    } finally {
+      setBusy(false)
+      setRemoving(null)
+    }
+  }
+
   const items = data?.items || []
   const waiting = items.filter((i) => i.status === 'awaiting_user')
 
@@ -87,7 +103,7 @@ export default function Downloads() {
         </div>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Time</th><th>File</th><th>Version</th><th>Result</th><th>Status</th></tr></thead>
+            <thead><tr><th>Time</th><th>File</th><th>Version</th><th>Result</th><th>Status</th><th /></tr></thead>
             <tbody>
               {items.map((i) => {
                 const v = i.verdict?.verdict
@@ -100,18 +116,33 @@ export default function Downloads() {
                       <td className="mono">{i.info.version || '-'}</td>
                       <td>{v ? <span className={`pill ${VERDICT[v] || 'info'}`}>{v}</span> : <span className="muted">-</span>}</td>
                       <td><span className={`pill flat ${tone}`}>{label}</span></td>
+                      <td onClick={(ev) => ev.stopPropagation()}>
+                        {i.status !== 'analyzing' && <Button size="sm" tone="danger" onClick={() => setRemoving(i)}>Remove</Button>}
+                      </td>
                     </tr>
-                    {open === i.id && <tr><td colSpan="5" style={{ background: 'var(--inset)' }}><Detail i={i} /></td></tr>}
+                    {open === i.id && <tr><td colSpan="6" style={{ background: 'var(--inset)' }}><Detail i={i} /></td></tr>}
                   </Fragment>
                 )
               })}
-              {data && items.length === 0 && <tr><td colSpan="5" className="empty">Nothing downloaded since the monitor started. Save a program into {data.watching[0] || 'your Downloads folder'} to try it.</td></tr>}
+              {data && items.length === 0 && <tr><td colSpan="6" className="empty">Nothing downloaded since the monitor started. Save a program into {data.watching[0] || 'your Downloads folder'} to try it.</td></tr>}
             </tbody>
           </table>
         </div>
       </div>
 
       <CheckServices />
+
+      {removing && (
+        <Confirm
+          danger
+          busy={busy}
+          title={`Remove ${removing.name}?`}
+          body="The file is deleted from your folder (or from isolation) and the entry disappears from this list. This cannot be undone."
+          confirmLabel="Remove"
+          onConfirm={removeEntry}
+          onCancel={() => setRemoving(null)}
+        />
+      )}
 
       {ask && (
         <Confirm

@@ -1,23 +1,10 @@
+import { Loader } from '@mantine/core'
 import { useEffect, useState } from 'react'
 import Button from './Button.jsx'
 
-export function Radar({ size = 120 }) {
-  return (
-    <div className="radar" style={{ '--size': `${size}px` }} role="status" aria-label="Loading">
-      <div className="sweep" />
-      <span className="blip" />
-      <span className="blip" />
-      <span className="blip" />
-    </div>
-  )
-}
-
+/** Small loading animation for panels (the Mantine "bars" loader). */
 export function Bars() {
-  return (
-    <span className="bars" role="status" aria-label="Loading">
-      <i /><i /><i /><i />
-    </span>
-  )
+  return <Loader type="bars" size="sm" color="var(--accent-2)" />
 }
 
 /** A shield that breathes while three dots bounce under it (the load screen has no scanner on purpose). */

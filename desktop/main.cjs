@@ -4,6 +4,7 @@
 const { app, BrowserWindow, dialog, session, shell } = require('electron')
 const { spawn, spawnSync } = require('node:child_process')
 const crypto = require('node:crypto')
+const fs = require('node:fs')
 const net = require('node:net')
 const path = require('node:path')
 const { createServer } = require('./server.cjs')
@@ -18,6 +19,39 @@ const portBusy = (port) =>
     s.once('connect', () => (s.destroy(), resolve(true)))
     s.once('error', () => resolve(false))
   })
+
+// ---------------------------------------------------------------- hidden ports
+// No well-known ports: two random ports are chosen once and kept in ports.json (next to api-token.txt).
+
+/** Ask for a random free port on 127.0.0.1. */
+function randomFreePort(avoid = []) {
+  return new Promise((resolve) => {
+    const tryOne = () => {
+      const port = 20000 + Math.floor(Math.random() * 40000)
+      if (avoid.includes(port)) return tryOne()
+      const s = net.createServer()
+      s.once('error', tryOne)
+      s.listen(port, '127.0.0.1', () => s.close(() => resolve(port)))
+    }
+    tryOne()
+  })
+}
+
+/** Read ports.json from the data folder, or make it. */
+async function loadPorts(dataDir) {
+  const file = path.join(dataDir, 'ports.json')
+  try {
+    const p = JSON.parse(fs.readFileSync(file, 'utf8'))
+    if (p.agent && p.scan) return p
+  } catch {
+    // not there yet
+  }
+  const agent = await randomFreePort()
+  const scan = await randomFreePort([agent])
+  fs.mkdirSync(dataDir, { recursive: true })
+  fs.writeFileSync(file, JSON.stringify({ agent, scan }))
+  return { agent, scan }
+}
 
 async function run(name, port, exe, args, opts) {
   if (await portBusy(port)) return // e.g. the Windows service is already running
@@ -69,15 +103,27 @@ async function boot() {
     const res = process.resourcesPath
     const programData = process.env.ProgramData || 'C:\\ProgramData'
     const agentDir = path.join(res, 'agent')
-    await run('agent', 7878, path.join(agentDir, 'soc-agent.exe'), [], { cwd: agentDir })
-    await run('scan', 8000, path.join(res, 'scan', 'soc-scan', 'soc-scan.exe'), [], {
+    const dataDir = path.join(programData, 'SocMonitor')
+    const ports = await loadPorts(dataDir)
+    await run('agent', ports.agent, path.join(agentDir, 'soc-agent.exe'), [], {
+      cwd: agentDir,
+      env: { ...process.env, SOC_PORT: String(ports.agent), SOC_SCAN_PORT: String(ports.scan) },
+    })
+    await run('scan', ports.scan, path.join(res, 'scan', 'soc-scan', 'soc-scan.exe'), [], {
       cwd: path.join(res, 'scan', 'soc-scan'),
-      env: { ...process.env, SOC_SCAN_DATA: path.join(programData, 'SocMonitor', 'scan') },
+      env: {
+        ...process.env,
+        SOC_SCAN_PORT: String(ports.scan),
+        SOC_SCAN_DATA: path.join(dataDir, 'scan'),
+        SOC_TOKEN_FILE: path.join(dataDir, 'api-token.txt'),
+      },
     })
     key = crypto.randomBytes(24).toString('hex')
     const { port } = await createServer({
       uiDir: path.join(res, 'ui'),
       key,
+      agentPort: ports.agent,
+      scanPort: ports.scan,
       tokenFiles: [path.join(programData, 'SocMonitor', 'api-token.txt')],
     })
     origin = `http://127.0.0.1:${port}`

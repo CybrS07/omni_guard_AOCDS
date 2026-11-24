@@ -6,7 +6,21 @@ use crate::fileinfo::FileInfo;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::OnceLock;
 use std::time::Duration;
+
+/// The shared secret (same one the dashboard proxy uses). The Python service answers nobody without it.
+static TOKEN: OnceLock<String> = OnceLock::new();
+
+/// Called once at start-up so every request to the Python service can carry the secret.
+pub fn set_token(token: &str) {
+    let _ = TOKEN.set(token.to_string());
+}
+
+/// The secret, or an empty string before start-up has set it.
+fn token() -> &'static str {
+    TOKEN.get().map(|s| s.as_str()).unwrap_or("")
+}
 
 /// POST `body` as JSON to `base` + `path` (base looks like "http://127.0.0.1:8000") -> response JSON.
 pub fn post_json(base: &str, path: &str, body: &Value) -> Result<Value, String> {
@@ -18,7 +32,8 @@ pub fn post_json(base: &str, path: &str, body: &Value) -> Result<Value, String> 
     s.set_read_timeout(Some(Duration::from_secs(120))).ok();
     s.set_write_timeout(Some(Duration::from_secs(10))).ok();
     let req = format!(
-        "POST {path} HTTP/1.1\r\nHost: {hostport}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+        "POST {path} HTTP/1.1\r\nHost: {hostport}\r\nContent-Type: application/json\r\nX-SOC-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+        token(),
         payload.len()
     );
     s.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
@@ -39,7 +54,7 @@ pub fn get_ok(base: &str, path: &str) -> bool {
     let Some(addr) = hostport.to_socket_addrs().ok().and_then(|mut a| a.next()) else { return false };
     let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(800)) else { return false };
     s.set_read_timeout(Some(Duration::from_secs(2))).ok();
-    let req = format!("GET {path} HTTP/1.1\r\nHost: {hostport}\r\nConnection: close\r\n\r\n");
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {hostport}\r\nX-SOC-Token: {}\r\nConnection: close\r\n\r\n", token());
     let mut head = [0u8; 16];
     s.write_all(req.as_bytes()).is_ok() && s.read(&mut head).map(|n| n >= 12 && head[..n].starts_with(b"HTTP/1.1 200")).unwrap_or(false)
 }

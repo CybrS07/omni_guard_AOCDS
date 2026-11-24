@@ -3,7 +3,7 @@
 Two layers, one direction of data:
 
 ```
- Windows / VM ──► Rust service (soc-agent) ──► JSON API on 127.0.0.1:7878 ──► React dashboard
+ Windows / VM ──► Rust service (soc-agent) ──► JSON API on 127.0.0.1:<agent port> ──► React dashboard
                   collects everything          one /api/snapshot for AI              reads the API only
 ```
 

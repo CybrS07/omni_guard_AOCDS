@@ -7,6 +7,9 @@ use std::path::PathBuf;
 pub struct Config {
     /// API port. The API only ever binds to 127.0.0.1.
     pub port: u16,
+    /// true (default): the agent and the Python service use random ports that are chosen once and kept in
+    /// <data_dir>/ports.json, so a scanner looking at the usual ports finds nothing. false: use `port` and `intel_url`.
+    pub random_ports: bool,
     /// Where txt logs and the API token live.
     pub data_dir: String,
     /// Folders whose permissions (ACLs) are watched for changes.
@@ -44,10 +47,12 @@ pub struct Config {
 }
 
 impl Default for Config {
+    /// Gives the default settings used when no config file is found, with sensible values for Windows or Linux.
     fn default() -> Self {
         let win = cfg!(windows);
         Config {
             port: 7878,
+            random_ports: true,
             data_dir: if win {
                 r"C:\ProgramData\SocMonitor".into()
             } else {
@@ -114,5 +119,61 @@ impl Config {
         }
         println!("[config] using built-in defaults");
         Config::default()
+    }
+}
+
+// ------------------------------------------------------------------ hidden (random) ports
+
+/// The two ports kept in <data_dir>/ports.json.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+pub struct Ports {
+    pub agent: u16,
+    pub scan: u16,
+}
+
+/// Is this port free on the loopback address right now?
+fn port_free(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+/// Pick a random free port between 20000 and 60000 that is not in `avoid`.
+fn random_free_port(avoid: &[u16]) -> u16 {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    loop {
+        let p: u16 = rng.gen_range(20000..60000);
+        if !avoid.contains(&p) && port_free(p) {
+            return p;
+        }
+    }
+}
+
+/// Where the launcher, the installer and the agent agree on the ports.
+pub fn ports_file(data_dir: &str) -> PathBuf {
+    PathBuf::from(data_dir).join("ports.json")
+}
+
+impl Config {
+    /// Fill in `port` and `intel_url` with the hidden ports.
+    /// Order: environment (SOC_PORT, SOC_SCAN_PORT) > ports.json > new random ports (saved to ports.json).
+    pub fn use_hidden_ports(&mut self) {
+        if !self.random_ports {
+            return;
+        }
+        let file = ports_file(&self.data_dir);
+        let saved: Option<Ports> = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str(&t).ok());
+        let env_port = |name: &str| std::env::var(name).ok().and_then(|v| v.parse::<u16>().ok());
+        let agent = env_port("SOC_PORT").or(saved.map(|p| p.agent));
+        let scan = env_port("SOC_SCAN_PORT").or(saved.map(|p| p.scan));
+        let agent = agent.unwrap_or_else(|| random_free_port(&[]));
+        let scan = scan.unwrap_or_else(|| random_free_port(&[agent]));
+        let ports = Ports { agent, scan };
+        // keep the file in step with what is used now, so the dashboard launcher finds the same numbers
+        let _ = std::fs::create_dir_all(&self.data_dir);
+        if let Ok(text) = serde_json::to_string(&ports) {
+            let _ = std::fs::write(&file, text);
+        }
+        self.port = agent;
+        self.intel_url = format!("http://127.0.0.1:{scan}");
     }
 }

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+/// Start the background watchers: folder permission checks, plus the Windows Security log reader on Windows.
 pub fn spawn(st: Arc<AppState>) {
     let a = st.clone();
     thread::Builder::new()
@@ -25,6 +26,7 @@ pub fn spawn(st: Arc<AppState>) {
 
 // ------------------------------------------------------------------ folder permissions
 
+/// On Unix systems, read a folder's permission mode and owner IDs as a stand-in for Windows access rules.
 #[cfg(unix)]
 fn local_acl(path: &str) -> Option<Vec<String>> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -35,11 +37,13 @@ fn local_acl(path: &str) -> Option<Vec<String>> {
         format!("gid={}", m.gid()),
     ])
 }
+/// On systems that are not Unix there is no simple permission snapshot, so this returns nothing.
 #[cfg(not(unix))]
 fn local_acl(_: &str) -> Option<Vec<String>> {
     None
 }
 
+/// Take a snapshot of who can access a folder, so a later change can be detected.
 fn acl_snapshot(path: &str) -> Option<Vec<String>> {
     if cfg!(windows) {
         let o = run("icacls", &[path], 20)?;
@@ -58,6 +62,7 @@ fn acl_snapshot(path: &str) -> Option<Vec<String>> {
     }
 }
 
+/// Loop forever, checking each watched folder's permissions every 30 seconds and alerting on changes.
 fn acl_loop(st: Arc<AppState>) {
     if st.demo {
         for f in &st.cfg.watched_folders {
@@ -114,6 +119,7 @@ struct Block {
 }
 
 impl Block {
+    /// Return the value of the first line that starts with the given key, with the key removed.
     fn value(&self, key: &str) -> Option<String> {
         self.lines
             .iter()
@@ -135,6 +141,7 @@ impl Block {
     }
 }
 
+/// Loop forever, reading recent Windows Security log events once a minute and turning them into alerts.
 fn eventlog_loop(st: Arc<AppState>) {
     if !st.is_admin {
         st.log("access", "WARN", "SECURITY_LOG_UNAVAILABLE agent is not elevated; logon/permission events are not collected");

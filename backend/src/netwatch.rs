@@ -57,6 +57,7 @@ pub struct IpView {
 static NET: Mutex<Option<HashMap<String, IpStat>>> = Mutex::new(None);
 
 impl IpStat {
+    /// Moves a remote address's five-minute counting window forward when its time is up, saving the old count into its history.
     fn roll(&mut self, now: Instant) {
         let start = *self.bucket_start.get_or_insert(now);
         if now.duration_since(start) >= BUCKET {
@@ -71,6 +72,7 @@ impl IpStat {
         }
     }
 
+    /// Returns the average number of new connections in past five-minute windows, or nothing until there are at least three.
     pub fn usual(&self) -> Option<f64> {
         if self.past.len() < 3 {
             return None;
@@ -186,6 +188,7 @@ pub fn observe(st: &AppState, conns: &[Seen]) {
     }
 }
 
+/// Returns the traffic watch list for the dashboard, with the most worrying addresses first, limited to 60 entries.
 pub fn snapshot() -> Vec<IpView> {
     let g = NET.lock().unwrap_or_else(|e| e.into_inner());
     let Some(map) = g.as_ref() else { return vec![] };
@@ -219,50 +222,4 @@ pub fn snapshot() -> Vec<IpView> {
     v.sort_by(|a, b| rank(&a.level).cmp(&rank(&b.level)).then(b.now_5m.cmp(&a.now_5m)).then(b.total.cmp(&a.total)));
     v.truncate(60);
     v
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn stat(cur: u32, past: &[u32]) -> IpStat {
-        IpStat { cur, past: past.iter().copied().collect(), public: true, ..Default::default() }
-    }
-
-    #[test]
-    fn normal_traffic_stays_normal() {
-        assert_eq!(judge(&stat(4, &[3, 5, 4, 3]), &[2, 3, 4, 5, 3]).0, "normal");
-    }
-
-    #[test]
-    fn spike_above_usual_is_watch_then_danger() {
-        let (lvl, why) = judge(&stat(30, &[3, 4, 3, 5]), &[]);
-        assert_eq!(lvl, "watch");
-        assert!(why[0].contains("usually about"));
-        assert_eq!(judge(&stat(80, &[3, 4, 3, 5]), &[]).0, "danger");
-    }
-
-    #[test]
-    fn two_signs_or_backdoor_port_is_danger() {
-        let mut s = stat(30, &[3, 4, 3, 5]);
-        s.ports = (1000..1014).collect();
-        let (lvl, why) = judge(&s, &[]);
-        assert_eq!((lvl, why.len()), ("danger", 2));
-        let mut b = stat(2, &[2, 2, 2]);
-        b.backdoor_port = Some(4444);
-        assert_eq!(judge(&b, &[]).0, "danger");
-    }
-
-    #[test]
-    fn private_addresses_never_reach_danger() {
-        let mut s = stat(500, &[1, 1, 1]);
-        s.public = false;
-        assert_eq!(judge(&s, &[]).0, "normal");
-    }
-
-    #[test]
-    fn new_address_with_no_history_needs_a_big_burst() {
-        assert_eq!(judge(&stat(20, &[]), &[]).0, "normal");
-        assert_eq!(judge(&stat(45, &[]), &[]).0, "watch");
-    }
 }

@@ -51,10 +51,12 @@ pub fn run_env(prog: &str, args: &[&str], envs: &[(&str, &str)], secs: u64) -> O
     }
 }
 
+/// Run a program with arguments and a time limit, without a shell, and return its output or None.
 pub fn run(prog: &str, args: &[&str], secs: u64) -> Option<Out> {
     run_env(prog, args, &[], secs)
 }
 
+/// Run a PowerShell script with a time limit and the given environment variables, and return its output.
 pub fn powershell(script: &str, envs: &[(&str, &str)], secs: u64) -> Option<Out> {
     let full = format!(
         "$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8;{script}"
@@ -67,6 +69,7 @@ pub fn powershell(script: &str, envs: &[(&str, &str)], secs: u64) -> Option<Out>
     )
 }
 
+/// Return the current local date and time as ISO 8601 text, such as 2026-01-31T12:00:00+01:00.
 pub fn now_iso() -> String {
     chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string()
 }
@@ -94,6 +97,7 @@ pub fn is_local_ip(s: &str) -> bool {
     }
 }
 
+/// Check whether the agent runs with administrator rights, which some checks need.
 pub fn detect_admin() -> bool {
     if cfg!(windows) {
         run("net", &["session"], 5).map(|o| o.ok).unwrap_or(false)
@@ -104,6 +108,7 @@ pub fn detect_admin() -> bool {
     }
 }
 
+/// Compare two strings in the same time whatever their contents, so attackers cannot guess a secret letter by letter.
 pub fn ct_eq(a: &str, b: &str) -> bool {
     if a.len() != b.len() {
         return false;
@@ -111,6 +116,7 @@ pub fn ct_eq(a: &str, b: &str) -> bool {
     a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
+/// Give a short plain-English name for well-known risky ports, or a generic label for others.
 pub fn port_hint(port: u16) -> &'static str {
     match port {
         21 => "FTP",

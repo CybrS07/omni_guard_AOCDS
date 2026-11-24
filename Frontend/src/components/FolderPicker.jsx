@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import Button from './Button.jsx'
-import Icon from './Icon.jsx'
 
 /**
  * Small folder / file browser backed by the agent (the browser itself cannot see real paths).
@@ -37,14 +36,14 @@ export default function FolderPicker({ files = false, onPick, onClose, start = '
           </div>
           <div style={{ maxHeight: 220, overflow: 'auto', display: 'grid', gap: 2 }}>
             {d.dirs.map((x) => (
-              <button key={x.path} type="button" className="btn btn-sm" style={{ justifyContent: 'flex-start', textAlign: 'left' }} onClick={() => go(x.path)}>
-                <Icon name="folder" size={16} /> {x.name}
-              </button>
+              <Button key={x.path} size="sm" type="button" icon="folder" onClick={() => go(x.path)}>
+                {x.name}
+              </Button>
             ))}
             {files && d.file_list.map((f) => (
-              <button key={f.path} type="button" className="btn btn-sm btn-outline" style={{ justifyContent: 'flex-start', textAlign: 'left' }} onClick={() => onPick(f.path)}>
-                <Icon name="fileText" size={16} /> {f.name}
-              </button>
+              <Button key={f.path} size="sm" type="button" icon="fileText" onClick={() => onPick(f.path)}>
+                {f.name}
+              </Button>
             ))}
             {d.dirs.length === 0 && (!files || d.file_list.length === 0) && <div className="hint">Nothing here.</div>}
           </div>

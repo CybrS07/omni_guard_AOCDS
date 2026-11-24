@@ -20,16 +20,19 @@ pub const SERVICE_NAME: &str = "SocMonitorAgent";
 
 define_windows_service!(ffi_service_main, service_main);
 
+/// Hand the process over to the Windows service manager, which then calls service_main.
 pub fn run() -> Result<(), windows_service::Error> {
     service_dispatcher::start(SERVICE_NAME, ffi_service_main)
 }
 
+/// Entry point the Windows service manager calls; runs the agent and logs any error.
 fn service_main(_args: Vec<OsString>) {
     if let Err(e) = run_service() {
         eprintln!("service error: {e}");
     }
 }
 
+/// Build the status message that tells Windows the service state and which stop requests it accepts.
 fn status(state: ServiceState, accept: ServiceControlAccept) -> ServiceStatus {
     ServiceStatus {
         service_type: ServiceType::OWN_PROCESS,
@@ -42,6 +45,7 @@ fn status(state: ServiceState, accept: ServiceControlAccept) -> ServiceStatus {
     }
 }
 
+/// Register the stop handler, report the service as running, run the agent until stop, then report it stopped.
 fn run_service() -> Result<(), Box<dyn std::error::Error>> {
     let stop = Arc::new(Notify::new());
     let stop_for_handler = stop.clone();

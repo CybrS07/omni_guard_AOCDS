@@ -39,7 +39,7 @@ function proxy(req, res, { port, rewrite, headers }) {
 }
 
 /** @returns {Promise<{server: import('http').Server, port: number}>} */
-function createServer({ uiDir, key, agentPort = 7878, scanPort = 8000, tokenFiles = [] }) {
+function createServer({ uiDir, key, agentPort, scanPort, tokenFiles = [] }) {
   const server = http.createServer((req, res) => {
     const host = (req.headers.host || '').split(':')[0]
     if (host !== '127.0.0.1' || req.headers['x-app-key'] !== key) {
@@ -47,7 +47,7 @@ function createServer({ uiDir, key, agentPort = 7878, scanPort = 8000, tokenFile
       return res.end('forbidden')
     }
     const url = req.url || '/'
-    if (url.startsWith('/scan-api/')) return proxy(req, res, { port: scanPort, rewrite: (u) => u.replace(/^\/scan-api/, '/api'), headers: {} })
+    if (url.startsWith('/scan-api/')) return proxy(req, res, { port: scanPort, rewrite: (u) => u.replace(/^\/scan-api/, '/api'), headers: { 'x-soc-token': readToken(tokenFiles) } })
     if (url.startsWith('/api/') || url === '/api') {
       return proxy(req, res, { port: agentPort, rewrite: (u) => u, headers: { 'x-soc-token': readToken(tokenFiles) } })
     }

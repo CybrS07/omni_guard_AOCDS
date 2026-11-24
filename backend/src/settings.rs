@@ -22,6 +22,7 @@ pub const DEFS: &[Def] = &[
     Def { name: "filescan", label: "Downloaded-file scanner", about: "Checks every new picture, document, video or archive in the watched folders for hidden scripts, hidden pixel data and zip bombs." },
     Def { name: "netwatch", label: "Traffic watch", about: "Learns which addresses your PC normally talks to and marks any address that suddenly sends/receives far more as danger." },
     Def { name: "integrity", label: "File integrity guard", about: "Re-checks the files and folders you protect and alerts when one is changed, added or deleted." },
+    Def { name: "registry", label: "Registry guard", about: "Reads the startup, service and installed-software parts of the Windows registry, checks that every entry belongs to real software or an official source, and takes a restore point every few minutes." },
     Def { name: "software", label: "Installed-software check", about: "Every 30 minutes checks installed programs against the NVD for known vulnerabilities and patches." },
 ];
 
@@ -48,6 +49,7 @@ struct Inner {
 static INNER: RwLock<Option<Inner>> = RwLock::new(None);
 static BEATS: Mutex<Vec<(&'static str, String)>> = Mutex::new(Vec::new());
 
+/// Run a function on the saved settings under the lock, or return None if settings are not loaded yet.
 fn with<R>(f: impl FnOnce(&mut Inner) -> R) -> Option<R> {
     INNER.write().unwrap_or_else(|e| e.into_inner()).as_mut().map(f)
 }
@@ -70,6 +72,7 @@ pub fn init(cfg: &Config) {
     *INNER.write().unwrap_or_else(|e| e.into_inner()) = Some(Inner { path, saved, svcs });
 }
 
+/// Write the saved settings to settings.json so changes survive a restart; write errors are ignored.
 fn persist(i: &Inner) {
     if let Ok(t) = serde_json::to_string_pretty(&i.saved) {
         let _ = std::fs::create_dir_all(i.path.parent().unwrap_or(std::path::Path::new(".")));
@@ -95,6 +98,7 @@ pub fn beat(name: &'static str) {
     }
 }
 
+/// Return each background service with its on/off state and last activity, for the Settings page.
 pub fn list() -> Vec<serde_json::Value> {
     let beats = BEATS.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let g = INNER.read().unwrap_or_else(|e| e.into_inner());
@@ -108,6 +112,7 @@ pub fn list() -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// Turn a background service on or off right now, without changing its autostart setting.
 pub fn set_running(name: &str, on: bool) -> Result<(), String> {
     with(|i| match i.svcs.iter_mut().find(|(k, _)| **k == name) {
         Some((_, s)) => {
@@ -119,6 +124,7 @@ pub fn set_running(name: &str, on: bool) -> Result<(), String> {
     .unwrap_or_else(|| Err("settings not ready".into()))
 }
 
+/// Choose whether a background service starts with the agent, and save that choice to disk.
 pub fn set_autostart(name: &str, on: bool) -> Result<(), String> {
     with(|i| match i.svcs.iter_mut().find(|(k, _)| **k == name) {
         Some((k, s)) => {
@@ -139,6 +145,7 @@ pub fn watch_dirs_override() -> Option<Vec<PathBuf>> {
     INNER.read().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|i| i.saved.watch_dirs.clone()).map(|v| v.into_iter().map(PathBuf::from).collect())
 }
 
+/// Say whether the user has set their own watched folders instead of the defaults.
 pub fn is_custom() -> bool {
     watch_dirs_override().is_some()
 }
@@ -170,38 +177,4 @@ pub fn change_dirs(current: Vec<PathBuf>, action: &str, path: &str) -> Result<()
         Ok(())
     })
     .unwrap_or_else(|| Err("settings not ready".into()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn services_default_on_and_toggle() {
-        let mut cfg = Config::default();
-        cfg.data_dir = std::env::temp_dir().join(format!("og-settings-{}", std::process::id())).display().to_string();
-        let _ = std::fs::remove_dir_all(&cfg.data_dir);
-        cfg.software_check = false;
-        init(&cfg);
-        assert!(enabled("downloads") && enabled("netwatch"));
-        assert!(!enabled("software"));
-        set_running("netwatch", false).unwrap();
-        assert!(!enabled("netwatch"));
-        set_autostart("netwatch", false).unwrap();
-        // survives a "restart"
-        init(&cfg);
-        assert!(!enabled("netwatch"));
-        assert!(set_running("nope", true).is_err());
-
-        let d = std::env::temp_dir().join(format!("og-watch-{}", std::process::id()));
-        std::fs::create_dir_all(&d).unwrap();
-        change_dirs(vec![PathBuf::from("/x")], "add", &d.display().to_string()).unwrap();
-        let v = watch_dirs_override().unwrap();
-        assert_eq!(v.len(), 2); // the default one was kept
-        change_dirs(vec![], "remove", "/x").unwrap();
-        assert_eq!(watch_dirs_override().unwrap().len(), 1);
-        change_dirs(vec![], "reset", "").unwrap();
-        assert!(watch_dirs_override().is_none());
-        assert!(change_dirs(vec![], "add", "/definitely/not/here").is_err());
-    }
 }

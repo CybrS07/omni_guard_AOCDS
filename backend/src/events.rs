@@ -128,6 +128,7 @@ impl Query {
 }
 
 type Cache = Mutex<HashMap<String, (Instant, Vec<EventRecord>)>>;
+/// Returns the shared cache of recent event query results, creating it the first time it is needed.
 fn cache() -> &'static Cache {
     static C: OnceLock<Cache> = OnceLock::new();
     C.get_or_init(|| Mutex::new(HashMap::new()))
@@ -145,7 +146,7 @@ pub fn read(q: &Query, demo: bool, admin: bool) -> Result<Vec<EventRecord>, Stri
         match hit {
             Some(v) => v,
             None => {
-                let fresh = if demo { demo_events(&q.log) } else { fetch(q)? };
+                let fresh = if demo { Vec::new() } else { fetch(q)? };
                 let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
                 if c.len() > 40 {
                     c.clear();
@@ -174,6 +175,7 @@ pub fn read(q: &Query, demo: bool, admin: bool) -> Result<Vec<EventRecord>, Stri
     Ok(out)
 }
 
+/// Runs a PowerShell script to read the Windows events that match the query and returns them as records.
 fn fetch(q: &Query) -> Result<Vec<EventRecord>, String> {
     // Everything dynamic arrives via E_* environment variables.
     let script = r#"$ErrorActionPreference='Stop'
@@ -209,6 +211,7 @@ ConvertTo-Json -InputObject @($out) -Depth 4 -Compress
     Ok(raw.into_iter().map(convert).collect())
 }
 
+/// Turns one raw event from PowerShell's output into an EventRecord, picking a readable name for it.
 fn convert(r: RawEvent) -> EventRecord {
     let log = r.log_name.unwrap_or_default();
     let id = r.id.unwrap_or(0);
@@ -305,48 +308,3 @@ fn well_known(log: &str, id: u32) -> Option<&'static str> {
     })
 }
 
-fn demo_events(log: &str) -> Vec<EventRecord> {
-    let now = chrono::Local::now();
-    let mk = |i: i64, id: u32, provider: &str, level: u8, msg: &str, data: &[(&str, &str)]| {
-        let lvl = match level {
-            1 => "Critical",
-            2 => "Error",
-            3 => "Warning",
-            _ => "Information",
-        };
-        convert(RawEvent {
-            record_id: Some(90_000 - i as u64),
-            log_name: Some(log.to_string()),
-            id: Some(id),
-            provider: Some(provider.into()),
-            level: Some(level),
-            level_name: Some(lvl.into()),
-            task: Some("None".into()),
-            keywords: Some(if log == "Security" { "Audit Success".into() } else { "Classic".into() }),
-            time: Some((now - chrono::Duration::minutes(i * 7)).to_rfc3339()),
-            computer: Some("DEMO-PC".into()),
-            user: Some("NT AUTHORITY\\SYSTEM".into()),
-            process_id: Some(644 + i as u32),
-            thread_id: Some(1200 + i as u32),
-            message: Some(msg.into()),
-            data: Some(data.iter().map(|(n, v)| RawField { name: Some((*n).into()), value: Some((*v).into()) }).collect()),
-            ..Default::default()
-        })
-    };
-    match log {
-        "Security" => vec![
-            mk(0, 4625, "Microsoft-Windows-Security-Auditing", 0, "An account failed to log on.", &[("TargetUserName", "admin"), ("LogonType", "3"), ("IpAddress", "198.51.100.77"), ("Status", "0xC000006D")]),
-            mk(1, 4624, "Microsoft-Windows-Security-Auditing", 0, "An account was successfully logged on.", &[("TargetUserName", "demo"), ("LogonType", "2"), ("IpAddress", "-")]),
-            mk(2, 4672, "Microsoft-Windows-Security-Auditing", 0, "Special privileges assigned to new logon.", &[("SubjectUserName", "demo")]),
-        ],
-        "Application" => vec![
-            mk(0, 1000, "Application Error", 2, "Faulting application name: demo.exe, version: 1.0.0.0", &[("AppName", "demo.exe"), ("ExceptionCode", "c0000005")]),
-            mk(1, 11707, "MsiInstaller", 4, "Product: Demo -- Installation completed successfully.", &[]),
-        ],
-        _ => vec![
-            mk(0, 7036, "Service Control Manager", 4, "The Windows Update service entered the running state.", &[("param1", "Windows Update"), ("param2", "running")]),
-            mk(1, 7045, "Service Control Manager", 4, "A service was installed in the system.", &[("ServiceName", "DemoSvc"), ("ImagePath", "C:\\demo\\svc.exe")]),
-            mk(2, 41, "Microsoft-Windows-Kernel-Power", 1, "The system has rebooted without cleanly shutting down first.", &[("BugcheckCode", "0")]),
-        ],
-    }
-}

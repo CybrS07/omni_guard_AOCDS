@@ -35,10 +35,12 @@ fn load_or_create_token(dir: &PathBuf) -> String {
 
 /// Starts all collectors and the API; returns when `shutdown` resolves.
 pub async fn run(shutdown: impl Future<Output = ()> + Send + 'static) {
-    let cfg = Config::load();
+    let mut cfg = Config::load();
+    cfg.use_hidden_ports();
     let demo = !cfg!(windows);
     let admin = util::detect_admin();
     let token = load_or_create_token(&PathBuf::from(&cfg.data_dir));
+    crate::intel_client::set_token(&token);
     crate::settings::init(&cfg);
     let st = Arc::new(AppState::new(cfg.clone(), demo, admin, token));
 
@@ -56,6 +58,7 @@ pub async fn run(shutdown: impl Future<Output = ()> + Send + 'static) {
     crate::filescan::spawn_monitor(st.clone());
     software::spawn(st.clone());
     crate::integrity::spawn(st.clone());
+    crate::registry::spawn(st.clone());
     firewall::spawn_log_watcher(st.clone());
 
     // Reading Windows firewall rules is slow; do it off the main path, then keep it fresh.
@@ -70,11 +73,8 @@ pub async fn run(shutdown: impl Future<Output = ()> + Send + 'static) {
         })
         .expect("spawn firewall refresher");
 
-    if demo {
-        st.alert("network", "high", "[demo] Outbound connection to 203.0.113.7 port 4444 (common backdoor/Metasploit port)", "Process powershell.exe (sample alert - non-Windows demo mode)", Some("203.0.113.7".into()), "demo1", 1);
-        st.alert("firewall", "high", "[demo] Port scan detected from 198.51.100.23", "42 different ports probed in 60 s (sample alert)", Some("198.51.100.23".into()), "demo2", 1);
-        st.alert("auth", "high", "[demo] Possible brute-force logon attempts", "9 failed logons in the last minute (sample alert)", Some("198.51.100.77".into()), "demo3", 1);
-    }
+    // Make the two ports invisible to other computers (Windows Firewall drops, never answers).
+    firewall::hide_ports(&[cfg.port, scan_port(&cfg)], admin);
 
     let app = api::router(st.clone());
     let addr = SocketAddr::from(([127, 0, 0, 1], cfg.port));
@@ -91,4 +91,9 @@ pub async fn run(shutdown: impl Future<Output = ()> + Send + 'static) {
         eprintln!("[agent] server error: {e}");
     }
     st.log("access", "INFO", "AGENT_STOPPED");
+}
+
+/// The Python service port, read back from `intel_url` ("http://127.0.0.1:41234").
+fn scan_port(cfg: &Config) -> u16 {
+    cfg.intel_url.rsplit(':').next().and_then(|p| p.trim_end_matches('/').parse().ok()).unwrap_or(8000)
 }

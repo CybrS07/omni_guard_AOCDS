@@ -1,0 +1,61 @@
+/* Paint the Mantine components with OUR colours (theme.css). Nothing here has its own colour. */
+
+:root {
+  --mantine-font-family: inherit;
+  --mantine-color-body: transparent;
+  --mantine-color-text: var(--text);
+  --mantine-radius-default: 11px;
+}
+
+/* Mantine writes its button colours as inline variables, so these rules need !important to win. */
+
+/* Filled button = the accent colour */
+.mantine-Button-root[data-variant='filled'] {
+  --button-bg: var(--accent) !important;
+  --button-hover: color-mix(in srgb, var(--accent) 80%, var(--white)) !important;
+  --button-color: var(--on-accent) !important;
+}
+
+/* Outline button = accent border, normal text colour */
+.mantine-Button-root[data-variant='outline'] {
+  --button-color: var(--text) !important;
+  --button-bd: 1px solid var(--accent) !important;
+  --button-hover: color-mix(in srgb, var(--accent) 24%, transparent) !important;
+}
+
+/* Danger buttons */
+.mantine-Button-root[data-tone='danger'][data-variant='filled'] {
+  --button-bg: var(--danger) !important;
+  --button-hover: var(--danger-soft) !important;
+}
+.mantine-Button-root[data-tone='danger'][data-variant='outline'] {
+  --button-bd: 1px solid var(--danger) !important;
+}
+
+/* Inputs, tags, pop-ups use our panel colours */
+.mantine-Input-input,
+.mantine-TagsInput-input,
+.mantine-NumberInput-input {
+  background: var(--input-bg);
+  color: var(--text);
+  border-color: var(--line);
+}
+.mantine-Modal-content,
+.mantine-Modal-header {
+  background: var(--pop-bg);
+  color: var(--text);
+}
+.mantine-Tabs-tab {
+  color: var(--muted);
+}
+.mantine-Tabs-tab[data-active] {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.mantine-Tabs-list::before {
+  border-color: var(--line);
+}
+.mantine-Notification-root {
+  background: var(--pop-bg);
+  color: var(--text);
+}

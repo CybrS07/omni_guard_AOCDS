@@ -7,10 +7,12 @@
 
 use crate::firewall::{Firewall, NewRule, MANAGED_PREFIX};
 
+/// Build the firewall rule name for a blocked port, so the same rule can be found later to undo it.
 pub fn rule_name(proto: &str, port: u16) -> String {
     format!("{MANAGED_PREFIX}Stop-{proto}-{port}-IN")
 }
 
+/// Check a protocol name from the user and return it as TCP or UDP, or an error if it is neither.
 pub fn parse_proto(p: &str) -> Result<&'static str, String> {
     match p.trim().to_uppercase().as_str() {
         "TCP" => Ok("TCP"),

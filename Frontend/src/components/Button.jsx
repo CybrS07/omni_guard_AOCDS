@@ -1,22 +1,34 @@
+import { Button as MantineButton } from '@mantine/core'
 import Icon from './Icon.jsx'
 
 /**
- * variant: 'primary' | 'outline' | 'uiverse-a' | 'uiverse-b'
- * tone:    'default' | 'danger'
- * See ui.css for how to drop in the original Uiverse CSS.
+ * Our button. It is the Mantine button (an npm package) with the same props the app already uses:
+ *   variant: 'primary' (filled) or 'outline'
+ *   tone:    'default' or 'danger'
+ *   size:    'sm' for a small one
+ *   icon:    name of an animated icon
+ *   busy:    shows a spinner and disables the button
  */
-export default function Button({ variant = 'outline', tone = 'default', size, icon, busy, children, className = '', ...rest }) {
-  const cls = [
-    'btn',
-    variant === 'primary' ? 'btn-primary' : variant === 'outline' ? 'btn-outline' : `btn-${variant}`,
-    tone === 'danger' ? 'btn-danger' : '',
-    size === 'sm' ? 'btn-sm' : '',
-    className,
-  ].join(' ')
+export default function Button({ variant = 'outline', tone = 'default', size, icon, busy, children, ...rest }) {
+  const mantineVariant = variant === 'primary' ? 'filled' : 'outline'
+  const mantineSize = size === 'sm' ? 'compact-sm' : 'sm'
+
+  let leftIcon = null
+  if (icon) {
+    leftIcon = <Icon name={icon} size={18} />
+  }
+
   return (
-    <button className={cls} disabled={busy || rest.disabled} {...rest}>
-      {busy ? <Icon name="loading" size={18} loop /> : icon ? <Icon name={icon} size={18} /> : null}
+    <MantineButton
+      variant={mantineVariant}
+      size={mantineSize}
+      data-tone={tone}
+      loading={busy}
+      leftSection={leftIcon}
+      disabled={rest.disabled}
+      {...rest}
+    >
       {children}
-    </button>
+    </MantineButton>
   )
 }

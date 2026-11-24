@@ -54,6 +54,7 @@ pub struct DiskDetail {
     pub removable: bool,
 }
 
+/// Start a background thread that refreshes the system information every 60 seconds.
 pub fn spawn(st: Arc<AppState>) {
     thread::Builder::new()
         .name("system-info".into())
@@ -65,6 +66,7 @@ pub fn spawn(st: Arc<AppState>) {
         .expect("spawn system info collector");
 }
 
+/// Gather the current facts about this machine (OS, CPU, memory, disks, accounts, services) into one record.
 pub fn collect() -> SystemInfo {
     let mut sys = System::new();
     sys.refresh_cpu();
@@ -153,6 +155,7 @@ fn machine_model() -> (Option<String>, Option<String>, bool) {
     }
 }
 
+/// Guess whether this is a virtual machine by matching hardware vendor and model names against known hypervisors.
 fn detect_vm(vendor: Option<&str>, model: Option<&str>, hypervisor_flag: bool) -> Option<String> {
     let all = format!("{} {}", vendor.unwrap_or(""), model.unwrap_or("")).to_lowercase();
     let known = [
@@ -178,6 +181,7 @@ fn detect_vm(vendor: Option<&str>, model: Option<&str>, hypervisor_flag: bool) -
     hypervisor_flag.then(|| "Hypervisor present".into())
 }
 
+/// Get the system services: Windows services via PowerShell, or systemd units on Linux.
 fn services() -> Vec<ServiceInfo> {
     if cfg!(windows) {
         let script = "ConvertTo-Json -Compress -InputObject @(Get-Service | ForEach-Object { [pscustomobject]@{Name=[string]$_.Name;DisplayName=[string]$_.DisplayName;Status=[string]$_.Status;StartType=[string]$_.StartType} })";

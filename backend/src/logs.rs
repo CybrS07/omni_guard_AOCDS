@@ -25,11 +25,13 @@ pub struct Logger {
 }
 
 impl Logger {
+    /// Creates the logger for the given folder and makes sure that folder exists.
     pub fn new(dir: PathBuf) -> Self {
         let _ = fs::create_dir_all(&dir);
         Logger { dir, lock: Mutex::new(()) }
     }
 
+    /// Returns the path of the text file for one log kind, or nothing if that kind is not allowed.
     fn file(&self, kind: &str) -> Option<PathBuf> {
         KINDS.contains(&kind).then(|| self.dir.join(format!("{kind}.txt")))
     }
@@ -83,6 +85,7 @@ impl Logger {
         all
     }
 
+    /// Returns the folder where the log files are stored.
     pub fn dir(&self) -> &PathBuf {
         &self.dir
     }

@@ -6,7 +6,7 @@ React 19 + Vite 8. It only shows data and sends commands; it never talks to the 
 |---|---|
 | `index.html` | Page shell |
 | `package.json` | Scripts: `dev` (Vite + agent + scan), `dev:ui` (page only), `build` |
-| `vite.config.js` | Dev server on 5173. Plugin `soc-services` starts the Rust agent and the Python service. Proxy: `/api` to `:7878` with the agent token (`X-SOC-Token`) added, `/scan-api` to `:8000` rewritten to `/api` |
+| `vite.config.js` | Dev server on 5173. Plugin `soc-services` starts the Rust agent and the Python service. Proxy: `/api` to `:<agent port>` with the agent token (`X-SOC-Token`) added, `/scan-api` to `:<scan port>` rewritten to `/api` |
 | `src/` | The app, see `src/README.md` |
 
 ## How it reaches the back-ends

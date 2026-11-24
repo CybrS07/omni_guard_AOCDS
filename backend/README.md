@@ -2,8 +2,8 @@
 
 | Folder | Program | Language | Port | Role |
 |---|---|---|---|---|
-| `src/` | **Agent** (`soc-agent`) | Rust | 7878 | Everything that touches Windows or the disk and must run all the time: system metrics, firewall, event log, folder watchers, download guard, file scanner, traffic watch, integrity guard, software inventory, alerts, logs, the JSON API |
-| `scan/` | **Scan + AI service** | Python (FastAPI) | 8000 | Sign-in (password and optional face), accounts, VirusTotal and NVD lookups, link/domain check, decoding hidden data in pictures and archives, the local int8 script classifier |
+| `src/` | **Agent** (`soc-agent`) | Rust | <agent port> | Everything that touches Windows or the disk and must run all the time: system metrics, firewall, event log, folder watchers, download guard, file scanner, traffic watch, integrity guard, software inventory, alerts, logs, the JSON API |
+| `scan/` | **Scan + AI service** | Python (FastAPI) | <scan port> | Sign-in (password and optional face), accounts, VirusTotal and NVD lookups, link/domain check, decoding hidden data in pictures and archives, the local int8 script classifier |
 
 Both listen on `127.0.0.1` only.
 
@@ -33,6 +33,13 @@ The agent never needs Python to run: if the Python service is down, download che
 
 ```
 npm run agent        # = cd backend && cargo run
-npm run scan         # = uv run uvicorn server:app --port 8000 (in backend/scan)
+npm run scan         # = uv run uvicorn server:app --a hidden random port (in backend/scan)
 cd backend && cargo test       # Rust unit tests
 ```
+
+## Added in this version
+* `registry.rs` - registry guard (verdicts, orphans, restore points). API: `/api/registry/*`.
+* `config.rs` - `random_ports` and `<data>/ports.json`; `firewall.rs::hide_ports` - the stealth firewall rule.
+* `downloads.rs::remove_entry` - the Remove button (deletes the file and the list entry).
+* `scan/deobf.py` - peels base64 / hex / char-code / reverse / PowerShell -enc layers of hidden scripts.
+* `scan/server.py` - answers only requests that carry the shared secret.

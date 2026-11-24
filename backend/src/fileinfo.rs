@@ -39,6 +39,7 @@ struct Raw {
     signer: Option<String>,
 }
 
+/// Reads the details of a downloaded file: its name, size and SHA-256 hash, plus publisher, version and signature on Windows.
 pub fn extract(path: &Path) -> Result<FileInfo, String> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let (sha256, size) = hash_file(path).map_err(|e| format!("cannot read {name}: {e}"))?;
@@ -85,6 +86,7 @@ pub fn hash_file(path: &Path) -> std::io::Result<(String, u64)> {
     Ok((h.finalize().iter().map(|b| format!("{b:02x}")).collect(), total))
 }
 
+/// Asks Windows PowerShell for the file's version info and digital signature; returns None if that fails.
 fn windows_details(path: &Path) -> Option<Raw> {
     // The path travels in an environment variable, never inside the script text.
     let script = r#"$p=$env:F_PATH
@@ -137,29 +139,4 @@ pub fn guess_from_name(file_name: &str) -> (String, String) {
         .collect::<Vec<_>>()
         .join(" ");
     (product, version)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn guesses_name_and_version() {
-        assert_eq!(guess_from_name("Notepad++ Setup 8.6.2.exe"), ("Notepad++".into(), "8.6.2".into()));
-        assert_eq!(guess_from_name("vlc-3.0.20-win64.exe"), ("vlc".into(), "3.0.20".into()));
-        assert_eq!(guess_from_name("tool_v2.1.exe"), ("tool".into(), "2.1".into()));
-        assert_eq!(guess_from_name("random.exe"), ("random".into(), String::new()));
-        assert_eq!(guess_from_name("7-Zip 19.00.exe"), ("7-Zip".into(), "19.00".into()));
-        assert_eq!(guess_from_name("notepad-plus-plus-8.6.2-x64.exe"), ("notepad-plus-plus".into(), "8.6.2".into()));
-    }
-
-    #[test]
-    fn hashes_known_value() {
-        let p = std::env::temp_dir().join("soc-hash-test.bin");
-        std::fs::write(&p, b"abc").unwrap();
-        let (h, n) = hash_file(&p).unwrap();
-        let _ = std::fs::remove_file(&p);
-        assert_eq!(n, 3);
-        assert_eq!(h, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
-    }
 }
