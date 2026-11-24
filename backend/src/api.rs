@@ -88,6 +88,9 @@ pub fn router(st: Shared) -> Router {
         .route("/api/registry/point", post(registry_point))
         .route("/api/registry/windows-point", post(registry_windows_point))
         .route("/api/registry/restore", post(registry_restore))
+        .route("/api/registry/guard", post(registry_guard))
+        .route("/api/schedules", get(schedules_view))
+        .route("/api/schedules/refresh", post(schedules_refresh))
         .layer(middleware::from_fn_with_state(st.clone(), guard))
         .layer(cors) // outermost so CORS preflights are answered before the guard runs
         .with_state(st)
@@ -809,4 +812,24 @@ async fn registry_windows_point(State(st): State<Shared>) -> ApiResult {
     let s = st.clone();
     let message = blocking(move || s.registry.windows_restore_point()).await?.map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(json!({ "ok": true, "message": message })))
+}
+
+/// Switch the automatic undo of changes by unverified programs on or off.
+async fn registry_guard(State(st): State<Shared>, Json(b): Json<IdBody>) -> Json<Value> {
+    st.registry.set_auto_revert(b.on);
+    st.log("access", "INFO", format!("REGISTRY_AUTO_UNDO {}", if b.on { "on" } else { "off" }));
+    Json(json!({ "ok": true, "auto_revert": b.on }))
+}
+
+// ------------------------------------------------------------------ scheduled tasks
+
+/// The list of scheduled tasks (auto-start ones first) and when it was fetched.
+async fn schedules_view(State(st): State<Shared>) -> Json<Value> {
+    Json(st.schedules.view())
+}
+
+/// Fetch the scheduled tasks again right now.
+async fn schedules_refresh(State(st): State<Shared>) -> Json<Value> {
+    st.schedules.refresh.store(true, std::sync::atomic::Ordering::SeqCst);
+    Json(json!({ "ok": true }))
 }

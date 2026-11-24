@@ -22,6 +22,9 @@ const KINDS = {
   service: 'Service',
   apppath: 'App path',
   software: 'Installed software',
+  ifeo: 'Debugger hook',
+  appinit: 'AppInit DLL',
+  activesetup: 'Active Setup',
 }
 
 /** A table of registry entries. `rows` is already filtered by the page. */
@@ -146,11 +149,27 @@ function Details({ entry }) {
         <span className="muted">Program file: </span>
         <span className="mono" style={{ wordBreak: 'break-all' }}>{entry.target || '-'}</span>
       </div>
+      <div>
+        <span className="muted">Belongs to: </span>
+        <b>{entry.group || '-'}</b>
+      </div>
       <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
         {entry.reasons.map((r) => (
           <li key={r}>{r}</li>
         ))}
       </ul>
+      {entry.links && entry.links.length > 0 && (
+        <div>
+          <span className="muted">Linked entries:</span>
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+            {entry.links.map((l) => (
+              <li key={l.id}>
+                {l.name} <span className="muted">({KINDS[l.kind] || l.kind}, {l.why})</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   )
 }

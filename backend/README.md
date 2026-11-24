@@ -43,3 +43,5 @@ cd backend && cargo test       # Rust unit tests
 * `downloads.rs::remove_entry` - the Remove button (deletes the file and the list entry).
 * `scan/deobf.py` - peels base64 / hex / char-code / reverse / PowerShell -enc layers of hidden scripts.
 * `scan/server.py` - answers only requests that carry the shared secret.
+* `regwatch.rs` - registry auditing + "who changed it" + automatic undo of changes by unverified programs.
+* `schedules.rs` - scheduled-task fetch (auto-start tasks), judged by the registry guard (`Store::judge`).

@@ -11,6 +11,9 @@
 //!   * Winlogon Shell / Userinit
 //!   * Services (ImagePath)
 //!   * App Paths
+//!   * Image File Execution Options (a "Debugger" there runs instead of the real program)
+//!   * AppInit_DLLs (a DLL pushed into every program that opens a window)
+//!   * Active Setup (commands that run once for every new user)
 //!   * Uninstall records (= the list of installed software, used as the "owner" database)
 //!
 //! Verdicts, in the order they are decided:
@@ -27,6 +30,15 @@
 //! into <data_dir>/registry/points/<time>/. Nothing is stored when nothing changed. Before any delete
 //! or restore a point is taken automatically, so every change can be undone. Restoring imports the
 //! exported keys again (it puts back what was removed or changed; it does not delete new entries).
+//!
+//! LINKS: after the scan every entry is linked to the app it belongs to and to the other entries of
+//! that app (its startup entry, its service, its App Path and its uninstall record), so the Registry
+//! page can draw a map: app -> everything the app put into the registry. Entries with no app end up
+//! in the group "No owner".
+//!
+//! WHO CHANGED IT: the file regwatch.rs turns on Windows registry auditing for these keys and reads
+//! which program made each change. Changes by unverified programs raise an alert and, when "undo"
+//! is on, are put back automatically. See regwatch.rs.
 //!
 //! First run ("initialize"): the guard reads the registry, and you tell it which publishers, folders
 //! and programs you trust. Until that is done the guard only shows what it sees: no alerts, no points.
@@ -60,6 +72,10 @@ const RUN_KEYS: &[&str] = &[
 const WINLOGON: &str = r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon";
 const SERVICES: &str = r"HKLM\SYSTEM\CurrentControlSet\Services";
 const APP_PATHS: &str = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths";
+const IFEO: &str = r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options";
+const WINDOWS_NT: &str = r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows";
+const WINDOWS_NT_32: &str = r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows NT\CurrentVersion\Windows";
+const ACTIVE_SETUP: &str = r"HKLM\SOFTWARE\Microsoft\Active Setup\Installed Components";
 const UNINSTALL: &[&str] = &[
     r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
     r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
@@ -89,10 +105,26 @@ fn uninstall_roots(sids: &[String]) -> Vec<String> {
     v
 }
 
+/// The keys whose changes we want to attribute to a program (used by regwatch.rs to switch auditing on).
+/// Services and App Paths are left out on purpose: Windows itself writes there all day long.
+pub fn audited_keys(sids: &[String]) -> Vec<String> {
+    let mut v = run_keys(sids);
+    v.push(WINLOGON.into());
+    v.push(IFEO.into());
+    v.push(WINDOWS_NT.into());
+    v.push(WINDOWS_NT_32.into());
+    v.push(ACTIVE_SETUP.into());
+    v
+}
+
 /// Keys exported into every restore point (services are exported only right before a delete).
 fn snapshot_keys(sids: &[String]) -> Vec<String> {
     let mut v = run_keys(sids);
     v.push(WINLOGON.into());
+    v.push(IFEO.into());
+    v.push(WINDOWS_NT.into());
+    v.push(WINDOWS_NT_32.into());
+    v.push(ACTIVE_SETUP.into());
     v.push(APP_PATHS.into());
     v.extend(uninstall_roots(sids));
     v
@@ -623,6 +655,61 @@ pub struct Entry {
     pub can_reset: bool,
     pub is_new: bool,
     pub first_seen: String,
+    /// the app / source this entry belongs to ("No owner" when nothing owns it)
+    pub group: String,
+    /// app | windows | signed | trusted | none
+    pub group_kind: String,
+    /// the other entries of the same app or the same program file
+    pub links: Vec<Link>,
+}
+
+/// One connection between two entries.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct Link {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    /// why they are linked, in plain words
+    pub why: String,
+}
+
+/// One registry change made by a program, as read from the Windows Security log (see regwatch.rs).
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct Change {
+    pub at: String,
+    pub key: String,
+    pub value: String,
+    pub old: String,
+    pub new: String,
+    /// "set" | "deleted" | "created"
+    pub op: String,
+    pub process: String,
+    pub pid: String,
+    /// official | software | signed | trusted | script-host | unverified | ours
+    pub process_verdict: String,
+    pub process_owner: String,
+    /// what the guard did: "allowed" | "alerted" | "undone" | "ours" | "undo failed: ..."
+    pub action: String,
+    pub reasons: Vec<String>,
+}
+
+/// Is registry auditing (the source of "who changed it") working?
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct AuditState {
+    pub ready: bool,
+    pub message: String,
+    pub checked: String,
+}
+
+/// The result of judging one command line (used for scheduled tasks and for the programs that change the registry).
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct Judged {
+    pub verdict: String,
+    pub owner: String,
+    pub reasons: Vec<String>,
+    pub target: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -651,6 +738,8 @@ pub struct Saved {
     pub baseline: BTreeMap<String, String>,
     pub first_seen: BTreeMap<String, String>,
     pub interval_mins: u32,
+    /// put back changes that an unverified program made to a startup key
+    pub auto_revert: bool,
 }
 
 impl Default for Saved {
@@ -666,6 +755,7 @@ impl Default for Saved {
             baseline: BTreeMap::new(),
             first_seen: BTreeMap::new(),
             interval_mins: DEFAULT_INTERVAL_MINS,
+            auto_revert: true,
         }
     }
 }
@@ -724,6 +814,9 @@ fn describe(kind: &str, key: &str) -> String {
         "winlogon" => "Windows sign-in (Winlogon)".into(),
         "service" => "Windows service".into(),
         "apppath" => "App Paths (how Windows finds a program)".into(),
+        "ifeo" => "Image File Execution Options (runs a debugger instead of the program)".into(),
+        "appinit" => "AppInit_DLLs (a DLL loaded into every program)".into(),
+        "activesetup" => "Active Setup (runs once for every new user)".into(),
         _ => format!("Installed software record ({who}{bits})"),
     }
 }
@@ -904,6 +997,147 @@ fn classify(raw: &Raw, id: &str, cx: &Ctx, sigs: &HashMap<String, Sig>) -> Verdi
     Verdict { verdict: "malware", owner: String::new(), reasons }
 }
 
+// ------------------------------------------------------------------ links between entries
+
+/// The "group" an entry belongs to, and what kind of group it is.
+fn group_of(e: &Entry) -> (String, &'static str) {
+    match e.verdict.as_str() {
+        "software" if e.kind == "software" => (e.name.clone(), "app"),
+        "software" => (e.owner.replace(" (you named it)", ""), "app"),
+        "official" => ("Windows".to_string(), "windows"),
+        "signed" => (format!("Publisher: {}", e.owner), "signed"),
+        "trusted" => ("Trusted by you".to_string(), "trusted"),
+        "orphan" if e.kind == "software" => (e.name.clone(), "app"),
+        _ => ("No owner".to_string(), "none"),
+    }
+}
+
+/// Link every entry to its app and to the other entries of that app.
+/// Two entries are linked when they belong to the same installed app, or when they start the same program file.
+/// A leftover (orphan) entry is linked to the removed app whose old folder contains its file.
+pub fn link_entries(list: &mut Vec<Entry>) {
+    // 1. the app each entry belongs to
+    for e in list.iter_mut() {
+        let (g, k) = group_of(e);
+        e.group = g;
+        e.group_kind = k.to_string();
+    }
+    // 2. leftovers: find the (removed) app whose folder held the file
+    let app_dirs: Vec<(String, String)> = list
+        .iter()
+        .filter(|e| e.kind == "software" && !e.target.is_empty())
+        .map(|e| (norm(&e.target), e.name.clone()))
+        .collect();
+    for e in list.iter_mut() {
+        if e.verdict == "orphan" && e.kind != "software" {
+            let me = norm(&e.target);
+            let best = app_dirs.iter().filter(|(d, _)| under(&me, d)).max_by_key(|(d, _)| d.len());
+            if let Some((_, name)) = best {
+                e.group = name.clone();
+                e.group_kind = "app".into();
+            }
+        }
+    }
+    // 3. the links
+    let snapshot: Vec<(String, String, String, String, String, String)> = list
+        .iter()
+        .map(|e| (e.id.clone(), e.name.clone(), e.kind.clone(), e.group.clone(), e.group_kind.clone(), if e.kind == "software" { String::new() } else { norm(&e.target) }))
+        .collect();
+    for e in list.iter_mut() {
+        let my_target = if e.kind == "software" { String::new() } else { norm(&e.target) };
+        let mut links: Vec<Link> = Vec::new();
+        for (id, name, kind, group, group_kind, target) in &snapshot {
+            if *id == e.id {
+                continue;
+            }
+            let same_app = e.group_kind == "app" && group_kind == "app" && *group == e.group;
+            let same_file = !my_target.is_empty() && *target == my_target;
+            if !(same_app || same_file) {
+                continue;
+            }
+            let why = if same_file && !same_app { "starts the same program file".to_string() } else { format!("same app: {}", e.group) };
+            links.push(Link { id: id.clone(), name: name.clone(), kind: kind.clone(), why });
+            if links.len() >= 12 {
+                break;
+            }
+        }
+        e.links = links;
+    }
+}
+
+/// Where the list of recent changes is kept on disk.
+fn data_dir_changes(dir: &Path) -> PathBuf {
+    dir.join("changes.json")
+}
+
+/// Keep only the installed programs whose install folder still exists (those are the "owners").
+fn make_installed(be: &dyn Backend, softs: &[SoftRec]) -> Vec<Installed> {
+    softs
+        .iter()
+        .filter_map(|s| {
+            let live: Vec<String> = s.dirs.iter().filter(|d| be.file_exists(d)).map(|d| norm(d)).collect();
+            (!live.is_empty()).then(|| Installed { name: s.name.clone(), publisher: s.publisher.clone(), live_dirs: live })
+        })
+        .collect()
+}
+
+/// Check the digital signature of every file that still needs a verdict, all in one PowerShell call.
+fn batch_sigs(raws: &[Raw], ids: &[String], cx: &Ctx) -> HashMap<String, Sig> {
+    let mut paths: Vec<String> = Vec::new();
+    for (r, id) in raws.iter().zip(ids) {
+        if matches!(r.kind, "autorun" | "service" | "apppath" | "ifeo" | "appinit" | "activesetup") {
+            let t = resolve_target(r, cx);
+            if needs_signature(&t, cx, id) {
+                paths.push(t.shown.clone());
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    if paths.is_empty() {
+        HashMap::new()
+    } else {
+        cx.be.signatures(&paths)
+    }
+}
+
+/// The map shown on the Registry page: one box per app / source, with all its entries inside.
+/// Boxes with the worst entries come first; "No owner" is always at the top when it has entries.
+fn build_map(entries: &[Entry]) -> Value {
+    let mut groups: BTreeMap<(String, String), Vec<&Entry>> = BTreeMap::new();
+    for e in entries {
+        groups.entry((e.group.clone(), e.group_kind.clone())).or_default().push(e);
+    }
+    let mut out: Vec<Value> = Vec::new();
+    for ((name, kind), list) in groups {
+        let kinds: BTreeMap<String, usize> = list.iter().fold(BTreeMap::new(), |mut m, e| {
+            *m.entry(e.kind.clone()).or_default() += 1;
+            m
+        });
+        let bad = list.iter().filter(|e| matches!(e.verdict.as_str(), "malware" | "orphan" | "unknown")).count();
+        out.push(json!({
+            "name": name,
+            "kind": kind,
+            "count": list.len(),
+            "bad": bad,
+            "kinds": kinds,
+            "entries": list.iter().map(|e| json!({ "id": e.id, "name": e.name, "kind": e.kind, "verdict": e.verdict, "target": e.target })).collect::<Vec<_>>(),
+        }));
+    }
+    let rank = |k: &str| match k {
+        "none" => 0,
+        "app" => 1,
+        "signed" => 2,
+        "trusted" => 3,
+        _ => 4,
+    };
+    out.sort_by(|a, b| {
+        let (ka, kb) = (a["kind"].as_str().unwrap_or(""), b["kind"].as_str().unwrap_or(""));
+        rank(ka).cmp(&rank(kb)).then(b["bad"].as_u64().cmp(&a["bad"].as_u64())).then(a["name"].as_str().unwrap_or("").to_lowercase().cmp(&b["name"].as_str().unwrap_or("").to_lowercase()))
+    });
+    Value::Array(out)
+}
+
 // ------------------------------------------------------------------ the store
 
 pub struct Store {
@@ -917,6 +1151,14 @@ pub struct Store {
     pub rescan: AtomicBool,
     last_scan: Mutex<String>,
     last_point_try: Mutex<Option<Instant>>,
+    /// installed-software records from the last scan (the "who owns this file" database)
+    softs: Mutex<Vec<SoftRec>>,
+    /// the latest registry changes read from the Security log
+    changes: Mutex<Vec<Change>>,
+    /// is auditing (the source of "who changed it") working?
+    pub audit: Mutex<AuditState>,
+    /// until this moment, registry changes are made by Omni Guard itself (delete / reset / restore)
+    own_until: Mutex<Option<Instant>>,
 }
 
 impl Store {
@@ -940,6 +1182,7 @@ impl Store {
             }
         }
         points.sort_by(|a, b| a.id.cmp(&b.id));
+        let changes: Vec<Change> = std::fs::read_to_string(data_dir_changes(&dir)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
         Store {
             dir,
             be,
@@ -951,6 +1194,10 @@ impl Store {
             rescan: AtomicBool::new(false),
             last_scan: Mutex::new(String::new()),
             last_point_try: Mutex::new(None),
+            softs: Mutex::new(vec![]),
+            changes: Mutex::new(changes),
+            audit: Mutex::new(AuditState::default()),
+            own_until: Mutex::new(None),
         }
     }
 
@@ -1025,6 +1272,39 @@ impl Store {
                 }
             }
         }
+        // Image File Execution Options: a "Debugger" value makes Windows start that file instead of the program
+        if let Some(t) = be.query(IFEO, true, Some("Debugger")) {
+            for b in parse_query(&t) {
+                if let Some(d) = b.get("Debugger") {
+                    if !d.trim().is_empty() {
+                        raws.push(Raw { kind: "ifeo", key: b.key.clone(), name: last_part(&b.key).to_string(), command: d.to_string(), soft: None });
+                    }
+                }
+            }
+        }
+        // AppInit_DLLs: DLLs that Windows loads into every program that uses the screen
+        for key in [WINDOWS_NT, WINDOWS_NT_32] {
+            if let Some(t) = be.query(key, false, Some("AppInit_DLLs")) {
+                for b in parse_query(&t) {
+                    if let Some(d) = b.get("AppInit_DLLs") {
+                        let first = d.split(|c| c == ',' || c == ';' || c == ' ').find(|x| !x.trim().is_empty());
+                        if let Some(f) = first {
+                            raws.push(Raw { kind: "appinit", key: key.into(), name: "AppInit_DLLs".into(), command: f.to_string(), soft: None });
+                        }
+                    }
+                }
+            }
+        }
+        // Active Setup: a StubPath command runs once for every new user
+        if let Some(t) = be.query(ACTIVE_SETUP, true, Some("StubPath")) {
+            for b in parse_query(&t) {
+                if let Some(d) = b.get("StubPath") {
+                    if !d.trim().is_empty() {
+                        raws.push(Raw { kind: "activesetup", key: b.key.clone(), name: last_part(&b.key).to_string(), command: d.to_string(), soft: None });
+                    }
+                }
+            }
+        }
         for root in uninstall_roots(&sids) {
             let Some(t) = be.query(&root, true, None) else { continue };
             for b in parse_query(&t) {
@@ -1075,29 +1355,12 @@ impl Store {
         let (raws, softs) = self.collect();
         let saved = self.saved.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let be = &*self.be;
-        let installed: Vec<Installed> = softs
-            .iter()
-            .filter_map(|s| {
-                let live: Vec<String> = s.dirs.iter().filter(|d| be.file_exists(d)).map(|d| norm(d)).collect();
-                (!live.is_empty()).then(|| Installed { name: s.name.clone(), publisher: s.publisher.clone(), live_dirs: live })
-            })
-            .collect();
+        let installed = make_installed(be, &softs);
         let cx = Ctx { be, win: windir_of(be), installed: &installed, saved: &saved };
 
         // signatures for every file that still needs a verdict, in one batch
         let ids: Vec<String> = raws.iter().map(|r| entry_id(r.kind, &r.key, &r.name)).collect();
-        let mut paths: Vec<String> = Vec::new();
-        for (r, id) in raws.iter().zip(&ids) {
-            if r.kind == "autorun" || r.kind == "service" || r.kind == "apppath" {
-                let t = resolve_target(r, &cx);
-                if needs_signature(&t, &cx, id) {
-                    paths.push(t.shown.clone());
-                }
-            }
-        }
-        paths.sort();
-        paths.dedup();
-        let sigs = if paths.is_empty() { HashMap::new() } else { be.signatures(&paths) };
+        let sigs = batch_sigs(&raws, &ids, &cx);
 
         let mut out = Vec::new();
         for (r, id) in raws.iter().zip(&ids) {
@@ -1118,10 +1381,13 @@ impl Store {
                 verdict: ver.verdict.into(),
                 owner: ver.owner,
                 reasons: ver.reasons,
-                can_delete: bad && r.kind != "winlogon" && (ver.verdict == "orphan" || matches!(r.kind, "autorun" | "apppath")),
-                can_reset: r.kind == "winlogon" && ver.verdict == "malware",
+                can_delete: bad && r.kind != "winlogon" && r.kind != "appinit" && (ver.verdict == "orphan" || matches!(r.kind, "autorun" | "apppath" | "ifeo" | "activesetup")),
+                can_reset: matches!(r.kind, "winlogon" | "appinit") && ver.verdict == "malware",
                 is_new: false,
                 first_seen: saved.first_seen.get(id).cloned().unwrap_or_default(),
+                group: String::new(),
+                group_kind: String::new(),
+                links: Vec::new(),
             });
         }
         // worst first
@@ -1135,6 +1401,8 @@ impl Store {
             _ => 6,
         };
         out.sort_by(|a, b| rank(&a.verdict).cmp(&rank(&b.verdict)).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+        link_entries(&mut out);
+        *self.softs.lock().unwrap_or_else(|e| e.into_inner()) = softs.clone();
         *self.entries.lock().unwrap_or_else(|e| e.into_inner()) = out.clone();
         *self.last_scan.lock().unwrap_or_else(|e| e.into_inner()) = now_iso();
         out
@@ -1259,6 +1527,7 @@ impl Store {
         let p = self.points.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|p| p.id == id).cloned().ok_or("restore point not found")?;
         // safety net first: the state we are about to overwrite
         self.take_point("before-restore", &format!("before restoring {id}"), &[])?;
+        self.mark_own(30);
         let mut n = 0;
         for i in 0..p.keys.len() {
             if self.be.import(&self.dir.join("points").join(&p.id).join(format!("{i}.reg"))) {
@@ -1271,6 +1540,75 @@ impl Store {
         Ok(n)
     }
 
+    // ---------------------------------------------------------- used by regwatch.rs and schedules.rs
+
+    /// The registry reader/writer (real reg.exe on Windows).
+    pub fn backend(&self) -> Arc<dyn Backend> {
+        self.be.clone()
+    }
+
+    /// Say "the next registry changes are ours" for a few seconds, so the guard does not alert about its own delete or restore.
+    pub fn mark_own(&self, secs: u64) {
+        *self.own_until.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now() + Duration::from_secs(secs));
+    }
+
+    /// Are we inside the "our own change" window?
+    pub fn own_active(&self) -> bool {
+        self.own_until.lock().unwrap_or_else(|e| e.into_inner()).map(|t| Instant::now() < t).unwrap_or(false)
+    }
+
+    /// Should changes by unverified programs be undone automatically?
+    pub fn auto_revert(&self) -> bool {
+        self.saved.lock().unwrap_or_else(|e| e.into_inner()).auto_revert
+    }
+
+    /// Turn the automatic undo on or off.
+    pub fn set_auto_revert(&self, on: bool) {
+        let mut s = self.saved.lock().unwrap_or_else(|e| e.into_inner());
+        s.auto_revert = on;
+        self.save(&s);
+    }
+
+    /// Keep one more change in the list (newest first, at most 300) and save the list.
+    pub fn push_change(&self, c: Change) {
+        let mut v = self.changes.lock().unwrap_or_else(|e| e.into_inner());
+        v.insert(0, c);
+        v.truncate(300);
+        if let Ok(t) = serde_json::to_string(&*v) {
+            let _ = std::fs::create_dir_all(&self.dir);
+            let _ = std::fs::write(data_dir_changes(&self.dir), t);
+        }
+    }
+
+    /// The recent changes, newest first.
+    pub fn changes(&self) -> Vec<Change> {
+        self.changes.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Decide "which software or official source owns this?" for command lines that are NOT registry entries,
+    /// for example the program of a scheduled task or the program that changed a registry value.
+    /// `items` = (id, command line). The answer has the same order.
+    pub fn judge(&self, items: &[(String, String)]) -> Vec<Judged> {
+        if self.softs.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
+            self.scan_entries(); // fills the list of installed software
+        }
+        let softs = self.softs.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let saved = self.saved.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let be = &*self.be;
+        let installed = make_installed(be, &softs);
+        let cx = Ctx { be, win: windir_of(be), installed: &installed, saved: &saved };
+        let raws: Vec<Raw> = items.iter().map(|(id, cmd)| Raw { kind: "autorun", key: String::new(), name: id.clone(), command: cmd.clone(), soft: None }).collect();
+        let ids: Vec<String> = items.iter().map(|(id, _)| id.clone()).collect();
+        let sigs = batch_sigs(&raws, &ids, &cx);
+        raws.iter()
+            .zip(&ids)
+            .map(|(r, id)| {
+                let ver = classify(r, id, &cx, &sigs);
+                Judged { verdict: ver.verdict.into(), owner: ver.owner, reasons: ver.reasons, target: resolve_target(r, &cx).shown }
+            })
+            .collect()
+    }
+
     // ---------------------------------------------------------- changing the registry
 
     /// Find a scanned entry by its ID and return a copy of it.
@@ -1279,10 +1617,10 @@ impl Store {
     }
 
     /// Check that a registry key is one the guard may change (startup, App Paths, Uninstall or service keys only).
-    fn key_allowed(key: &str) -> bool {
+    pub fn key_allowed(key: &str) -> bool {
         let k = key.to_lowercase();
         (k.starts_with("hklm\\") || k.starts_with("hku\\"))
-            && ["\\currentversion\\run", "\\policies\\explorer\\run", "\\app paths\\", "\\currentversion\\uninstall\\", "\\currentcontrolset\\services\\"].iter().any(|m| k.contains(m))
+            && ["\\currentversion\\run", "\\policies\\explorer\\run", "\\app paths\\", "\\currentversion\\uninstall\\", "\\currentcontrolset\\services\\", "\\image file execution options\\", "\\active setup\\installed components\\"].iter().any(|m| k.contains(m))
     }
 
     /// Delete an entry the guard classified as orphan (any kind) or malware (startup / App Paths). A point is taken first.
@@ -1296,8 +1634,10 @@ impl Store {
         }
         let _g = self.busy.lock().unwrap_or_else(|e| e.into_inner());
         self.take_point("before-delete", &format!("before deleting {} ({})", e.name, e.kind), &[e.key.clone()])?;
+        self.mark_own(20);
         match e.kind.as_str() {
             "autorun" => self.be.delete_value(&e.key, &e.name)?,
+            "ifeo" => self.be.delete_value(&e.key, "Debugger")?,
             _ => self.be.delete_key(&e.key)?,
         }
         Ok(format!("Deleted {} ({}). A restore point was taken first.", e.name, e.kind))
@@ -1309,7 +1649,15 @@ impl Store {
         if !e.can_reset {
             return Err("This entry cannot be reset.".into());
         }
-        let default = if e.name.eq_ignore_ascii_case("Shell") { "explorer.exe".to_string() } else { format!("{}\\system32\\userinit.exe,", windir_of(&*self.be)) };
+        // the Windows default: explorer.exe, userinit.exe, or nothing at all for AppInit_DLLs
+        let default = if e.kind == "appinit" {
+            String::new()
+        } else if e.name.eq_ignore_ascii_case("Shell") {
+            "explorer.exe".to_string()
+        } else {
+            format!("{}\\system32\\userinit.exe,", windir_of(&*self.be))
+        };
+        self.mark_own(20);
         let _g = self.busy.lock().unwrap_or_else(|e| e.into_inner());
         self.take_point("before-delete", &format!("before resetting Winlogon {}", e.name), &[])?;
         self.be.set_value(&e.key, &e.name, "REG_SZ", &default)?;
@@ -1431,6 +1779,10 @@ impl Store {
             "counts": counts,
             "entries": entries,
             "points": self.points(),
+            "map": build_map(&entries),
+            "changes": self.changes(),
+            "auto_revert": s.auto_revert,
+            "audit": self.audit.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         })
     }
 

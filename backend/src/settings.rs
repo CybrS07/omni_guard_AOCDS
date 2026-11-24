@@ -23,6 +23,7 @@ pub const DEFS: &[Def] = &[
     Def { name: "netwatch", label: "Traffic watch", about: "Learns which addresses your PC normally talks to and marks any address that suddenly sends/receives far more as danger." },
     Def { name: "integrity", label: "File integrity guard", about: "Re-checks the files and folders you protect and alerts when one is changed, added or deleted." },
     Def { name: "registry", label: "Registry guard", about: "Reads the startup, service and installed-software parts of the Windows registry, checks that every entry belongs to real software or an official source, and takes a restore point every few minutes." },
+    Def { name: "schedules", label: "Schedule watch", about: "Every 10 minutes lists the Windows scheduled tasks, finds the ones that start by themselves at boot or sign-in, and flags the ones that belong to no installed software." },
     Def { name: "software", label: "Installed-software check", about: "Every 30 minutes checks installed programs against the NVD for known vulnerabilities and patches." },
 ];
 

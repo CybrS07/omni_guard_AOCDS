@@ -17,6 +17,8 @@ mod logs;
 mod netwatch;
 mod ports;
 mod registry;
+mod regwatch;
+mod schedules;
 #[cfg(windows)]
 mod service;
 mod settings;

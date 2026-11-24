@@ -179,6 +179,7 @@ pub struct AppState {
     pub integrity: IntegrityStore,
     pub software: SoftwareStore,
     pub registry: RegistryStore,
+    pub schedules: crate::schedules::Store,
     cooldowns: Mutex<HashMap<String, Instant>>,
     next_alert_id: Mutex<u64>,
 }
@@ -195,6 +196,7 @@ impl AppState {
             integrity: IntegrityStore::new(PathBuf::from(&cfg.data_dir)),
             software: SoftwareStore::new(PathBuf::from(&cfg.data_dir)),
             registry: RegistryStore::new(PathBuf::from(&cfg.data_dir)),
+            schedules: crate::schedules::Store::new(PathBuf::from(&cfg.data_dir)),
             cfg,
             demo,
             is_admin,

@@ -8,7 +8,7 @@ use crate::util::now_iso;
 
 /// Fixed whitelist: the API can only ever touch these files (no path traversal).
 /// `scan.txt` is written by the Python face-scan service, everything else by this agent.
-pub const KINDS: [&str; 5] = ["apps", "access", "permissions", "alerts", "scan"];
+pub const KINDS: [&str; 6] = ["apps", "access", "permissions", "alerts", "scan", "schedules"];
 const MAX_BYTES: u64 = 5 * 1024 * 1024;
 
 #[derive(Serialize, Clone)]

@@ -3,13 +3,18 @@ import { api, usePoll } from '../api.js'
 import Button from '../components/Button.jsx'
 import { useToast } from '../components/Feedback.jsx'
 import { Bars } from '../components/Loader.jsx'
+import ChangesTable from '../components/registry/ChangesTable.jsx'
 import EntriesTable from '../components/registry/EntriesTable.jsx'
+import GuardCard from '../components/registry/GuardCard.jsx'
+import MapView from '../components/registry/MapView.jsx'
 import RestorePoints from '../components/registry/RestorePoints.jsx'
 import SetupForm from '../components/registry/SetupForm.jsx'
 
 /**
  * Registry guard page.
  *   Needs attention  -> malware (no owner), cannot-tell, and leftovers of removed software
+ *   Map              -> every app with all the registry entries that belong to it, linked together
+ *   Changes          -> who changed what (the program name) and what the guard did about it
  *   All entries      -> everything the guard read
  *   Restore points   -> the copies taken every few minutes
  *   Settings         -> the setup form again
@@ -73,10 +78,14 @@ export default function Registry() {
         <span className="hint">Last scan: {data.last_scan || 'not yet'}</span>
       </div>
 
+      <GuardCard audit={data.audit} autoRevert={data.auto_revert} onChanged={reload} />
+
       <div className="panel">
         <Tabs defaultValue="attention">
           <Tabs.List mb="md">
             <Tabs.Tab value="attention">Needs attention ({attention.length})</Tabs.Tab>
+            <Tabs.Tab value="map">Map ({(data.map || []).length})</Tabs.Tab>
+            <Tabs.Tab value="changes">Changes ({(data.changes || []).length})</Tabs.Tab>
             <Tabs.Tab value="all">All entries ({entries.length})</Tabs.Tab>
             <Tabs.Tab value="points">Restore points ({data.points.length})</Tabs.Tab>
             <Tabs.Tab value="settings">Settings</Tabs.Tab>
@@ -84,6 +93,12 @@ export default function Registry() {
 
           <Tabs.Panel value="attention">
             <EntriesTable rows={attention} onChanged={reload} />
+          </Tabs.Panel>
+          <Tabs.Panel value="map">
+            <MapView groups={data.map} />
+          </Tabs.Panel>
+          <Tabs.Panel value="changes">
+            <ChangesTable changes={data.changes} />
           </Tabs.Panel>
           <Tabs.Panel value="all">
             <EntriesTable rows={entries} onChanged={reload} />

@@ -4,6 +4,7 @@ import Button from '../components/Button.jsx'
 import EventsPanel from '../components/EventsPanel.jsx'
 import Icon from '../components/Icon.jsx'
 import { Bars } from '../components/Loader.jsx'
+import SchedulesPanel from '../components/SchedulesPanel.jsx'
 import { clock } from '../format.js'
 
 const TABS = [
@@ -13,6 +14,7 @@ const TABS = [
   { id: 'permissions', label: 'Permission changes', file: 'permissions.txt' },
   { id: 'alerts', label: 'Alerts', file: 'alerts.txt' },
   { id: 'scan', label: 'Face scan', file: 'scan.txt' },
+  { id: 'schedules', label: 'Schedules', file: 'schedules.txt' },
   { id: 'events', label: 'Windows events', file: null },
 ]
 
@@ -25,7 +27,9 @@ export default function Logs() {
 
   const path = `/logs?kind=${kind}&limit=${limit}&q=${encodeURIComponent(q)}`
   const isEvents = kind === 'events'
-  const { data, error, reload } = usePoll(path, live ? 4000 : 0, !isEvents)
+  const isSchedules = kind === 'schedules'
+  const isTable = isEvents || isSchedules // these tabs draw their own table instead of log lines
+  const { data, error, reload } = usePoll(path, live ? 4000 : 0, !isTable)
   const entries = (data?.entries || []).filter((e) => level === 'all' || e.level === level)
   const file = TABS.find((t) => t.id === kind)?.file
 
@@ -34,9 +38,9 @@ export default function Logs() {
       <div className="page-head">
         <div>
           <h1>Logs</h1>
-          <p>{isEvents ? 'Windows Event Log records with full details' : 'Plain-text records written by the agent and the face-scan service'}{file ? <> · <span className="mono">{file}</span></> : ''}</p>
+          <p>{isEvents ? 'Windows Event Log records with full details' : isSchedules ? 'Scheduled tasks that start by themselves, fetched automatically' : 'Plain-text records written by the agent and the face-scan service'}{file ? <> · <span className="mono">{file}</span></> : ''}</p>
         </div>
-        {!isEvents && (
+        {!isTable && (
           <div className="toolbar">
             <label className="hint" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} /> auto-refresh
@@ -55,7 +59,7 @@ export default function Logs() {
               </button>
             ))}
           </div>
-          {!isEvents && <div className="toolbar">
+          {!isTable && <div className="toolbar">
             <input className="input" placeholder="Search text…" value={q} onChange={(e) => setQ(e.target.value)} />
             <select className="input" value={level} onChange={(e) => setLevel(e.target.value)}>
               <option value="all">All levels</option><option>INFO</option><option>WARN</option><option>ALERT</option>
@@ -67,10 +71,11 @@ export default function Logs() {
         </div>
 
         {isEvents && <EventsPanel />}
+        {isSchedules && <SchedulesPanel />}
 
-        {!isEvents && !data && !error && <div className="empty"><Bars /></div>}
-        {!isEvents && error && <div className="empty">{error.message}</div>}
-        {!isEvents && data && (
+        {!isTable && !data && !error && <div className="empty"><Bars /></div>}
+        {!isTable && error && <div className="empty">{error.message}</div>}
+        {!isTable && data && (
           <div className="table-wrap" style={{ maxHeight: 'calc(100vh - 300px)', minHeight: 260, overflow: 'auto' }}>
             <table>
               <thead><tr><th style={{ width: 160 }}>Time</th><th style={{ width: 120 }}>Source</th><th style={{ width: 80 }}>Level</th><th>Event</th></tr></thead>
@@ -90,7 +95,7 @@ export default function Logs() {
             </table>
           </div>
         )}
-        {!isEvents && <div className="hint" style={{ marginTop: 10 }}>
+        {!isTable && <div className="hint" style={{ marginTop: 10 }}>
           Logs are capped at 5 MB per file (older content is moved to <span className="mono">*.old.txt</span>). Security-log events need the agent to run elevated.
         </div>}
       </div>
