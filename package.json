@@ -21,6 +21,6 @@
     "desktop:build": "npm run desktop:setup && npm run build:ui && npm run build:agent && npm run build:scan && npm --prefix desktop run dist"
   },
   "devDependencies": {
-    "concurrently": "^9.0.0"
+    "concurrently": "^10.0.7"
   }
 }
