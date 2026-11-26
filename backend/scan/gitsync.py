@@ -3,6 +3,8 @@
 The repository layout we expect
     rules/*.yar                 YARA rules (any sub folders)
     models/script_clf_int8.npz  int8 script model (optional)
+    models/*.onnx               INT8 / tree models of the deep-learning modules (optional): sentinel_rf.onnx, sentinel_xgb.onnx,
+                                netshield_gnn_int8.onnx  (any subset; each is loaded and run once before it is accepted)
     manifest.json               optional: {"rules/a.yar": "<sha256>", ...}  every listed file must match its hash
 
 How an update works (nothing live is touched until every check has passed)
@@ -36,6 +38,7 @@ from urllib.parse import urlsplit, urlunsplit
 from pydantic import BaseModel
 from fastapi import APIRouter, Header, HTTPException
 
+import ai_common
 import aimodel
 import intel
 import accounts
@@ -196,8 +199,8 @@ def check_manifest(root: Path) -> list[str]:
     return problems
 
 
-def install(root: Path) -> tuple[int, bool]:
-    """Copy the checked rules and model into the live folders. Returns (rule files copied, model copied)."""
+def install(root: Path) -> tuple[int, bool, int]:
+    """Copy the checked rules and models into the live folders. Returns (rule files copied, script model copied, ONNX models copied)."""
     rules_src = root / "rules"
     copied = 0
     if rules_src.is_dir():
@@ -219,7 +222,16 @@ def install(root: Path) -> tuple[int, bool]:
         shutil.copy2(model_src, tmp)
         os.replace(tmp, aimodel.SYNCED_MODEL)
         model_done = True
-    return copied, model_done
+    onnx_done = 0
+    for name in ai_common.KNOWN_ONNX:
+        src = root / "models" / name
+        if src.is_file():
+            ai_common.SYNCED_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = ai_common.SYNCED_DIR / (name + ".new")
+            shutil.copy2(src, tmp)
+            os.replace(tmp, ai_common.SYNCED_DIR / name)
+            onnx_done += 1
+    return copied, model_done, onnx_done
 
 
 # ---------------------------------------------------------------- the whole update
@@ -274,14 +286,25 @@ def run_sync(force: bool = False) -> dict:
                 set_status(ok=False, message=f"Update rejected, model not usable: {e}"[:300], at=time.time(), commit=commit[:10])
                 return dict(_status)
 
-        copied, model_done = install(REPO_DIR)
+        for name in ai_common.KNOWN_ONNX:
+            f = REPO_DIR / "models" / name
+            if f.is_file():
+                try:
+                    ai_common.check_onnx_generic(f)
+                except Exception as e:
+                    set_status(ok=False, message=f"Update rejected, {name} not usable: {e}"[:300], at=time.time(), commit=commit[:10])
+                    return dict(_status)
+
+        copied, model_done, onnx_done = install(REPO_DIR)
         yara_engine.reload()
         if model_done:
             aimodel.reload()
+        if onnx_done:
+            ai_common.reload_all()
         state["last_commit"] = commit
         save_state(state)
-        set_status(ok=True, message=f"Updated: {copied} rule file(s)" + (", new model" if model_done else ""),
-                   at=time.time(), commit=commit[:10], rules=copied, model=model_done)
+        set_status(ok=True, message=f"Updated: {copied} rule file(s)" + (", new script model" if model_done else "") + (f", {onnx_done} deep-learning model(s)" if onnx_done else ""),
+                   at=time.time(), commit=commit[:10], rules=copied, model=model_done, onnx=onnx_done)
         return dict(_status)
     finally:
         _status["running"] = False

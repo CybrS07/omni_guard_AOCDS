@@ -13,6 +13,7 @@ turns them into alerts and lets one person look at everything in one dashboard w
 | Logs | `logs.rs`, `schedules.rs` | Searchable text / JSON logs, plus the **Schedules** tab: Windows scheduled tasks that start at boot or sign-in, fetched automatically every 10 minutes |
 | System | `system.rs` | Processes, services, hardware |
 | Settings | `settings.rs`, `integrity.rs`, `service.rs` | Services, folders, integrity guard, accounts, updates (button + 48 h auto check), AI model, API keys |
+| AI Shield | `scan/netshield.py`, `scan/cmdguard.py`, `scan/ai_api.py`, `src/aiguard.rs` | Worm detection and terminal-command watching, scanned in realtime or on demand, with a safe response (see below) |
 | Login | `scan/accounts.py` | Password sign-in; the first account is the administrator |
 
 ## Registry guard (registry.rs)
@@ -70,8 +71,8 @@ The Windows uninstaller runs it automatically (`desktop/build/installer.nsh`).
 - YARA is the primary offline engine; VirusTotal is an optional extra (hash lookup, needs a key and internet).
 - `scan/yara_engine.py` loads `scan/rules/*.yar` plus rules synced from git, and `filescan.analyze` runs it on the file and on every hidden payload and de-scrambled layer. Findings are named `yara-<RuleName>`; severity comes from the rule's `meta: severity`.
 - `scan/gitsync.py` (Settings -> Updates): **Update now** button plus an automatic check every **48 hours** (the time of the last check is saved, so a restart does not reset it). The repository, branch and token are NOT typed in the dashboard: they come from `.env` (`UPDATE_REPO`, `UPDATE_BRANCH`, `GIT_TOKEN`) or a shipped `update-source.json`. The repo holds `rules/`, `models/script_clf_int8.npz`, optional `rules/known-bad-hashes.txt` and `manifest.json`. Hash check, compile check and model load must all pass, then rules and model are hot-swapped. A bad update is rejected and the old rules keep running.
-- Process memory scan: `POST /api/yara/scan-process {pid}` (Windows, run as Administrator).
-- SQLite storage is planned for phase 2.
+- The scanner never reads another program's memory: that was removed because it could freeze other programs.
+- SQLite storage: findings and automatic actions are kept in a local database (`scan/store.py`).
 
 ## Local model training
 - Settings -> "Script AI model": **Train now** trains on this PC in about 30 s (generated samples + harmless scripts found here + optional folders), writes int8 weights to the data folder and hot-swaps them. **Go back** restores the shipped model. Live model = local training or Git sync, whichever wrote last.
@@ -108,3 +109,56 @@ Cause: another program (Git, Anaconda, Perl, an old OpenSSL) has its own copy of
 - **Training:** first start after install trains a model on this PC in the background (`modeltrain.start_first_run`): graphics card if CuPy and a card exist, otherwise about 50% of the processor at lower priority. The shipped model protects meanwhile.
 - **Start-up:** the release agent carries an "administrator required" manifest (`backend/build.rs`) and also relaunches itself elevated if started without rights (`SOC_NO_ELEVATE=1` turns that off).
 - **Packages:** `.github/dependabot.yml` (weekly pull requests) and `.github/workflows/security.yml` (weekly npm / cargo / pip audit).
+
+## AI Shield
+Two parts, both on the AI Shield page. Each is a second opinion next to YARA, not a replacement for it.
+
+| Part | Model | Input | Output |
+|---|---|---|---|
+| **Net-Shield** (`netshield.py`) | graph neural network (INT8, ONNX) | the connection table as a graph (programs and addresses) | normal / scanning / propagating per node |
+| **Command AI** (`cmdguard.py`) | rules + script AI + context + behaviour | every new shell or system-tool command line | ok / suspicious / malicious |
+
+* **Scanning:** `Realtime` (connections every 10 s, new commands every 3 s) or `Manual` (nothing runs by itself; the **Scan now** button checks the connections and every command running right now, once).
+* **Response mode:** off / suggest (default) / auto. Actions are `taskkill` for a program and `netsh advfirewall` rules for an address; Windows core programs, this app and the allow-list are never touched; one action per target per 10 minutes, at most 6 automatic actions per 10 minutes; every action is logged and stored.
+* Net-Shield calls a worm only when it sees the chain "contacted from outside, then fans out on the same port". A program that talks to fewer than 5 machines is never called a scanner. An automatic action needs a second reading 8+ seconds later.
+* Memory scanning (the old "Ghost" module) was removed: reading other programs' memory could freeze them.
+* The registry judge (Sentinel, Random Forest + XGBoost) still runs from the Registry page.
+* Honest numbers: `scan/models/ai_manifest.json` holds the training reports, including results on attack families the model never saw. `pytest backend/scan/tests` re-runs the checks.
+
+## YARA + VirusTotal together
+`filescan.analyze` always runs YARA first (offline), then the hashes and signature, then VirusTotal (hash only) when a key is set. A VirusTotal error (no key, rate limit, offline) is reported as a note and never hides a YARA finding. Tests: `backend/scan/tests/test_yara_virustotal.py`.
+
+## PE malware model (HDF5 weights)
+`pefeatures.py` turns a Windows program into 99 numbers (header, sections, entropy, imported-function groups, strings; **no code is run**). `pemodel.py` runs a small neural network on them. The weights, the scaler and the training report are all in **one HDF5 file**: `scan/models/pe_malware.h5` (it ships inside the installer; `build.py` refuses to package without it).
+
+| Step | Command |
+|---|---|
+| collect malware features (theZoo, no key) | `python build_dataset.py --zoo` |
+| collect malware features (MalwareBazaar) | `python build_dataset.py --bazaar --bazaar-key YOUR_KEY --bazaar-limit 1500` |
+| collect clean features | `python build_dataset.py --benign-dir "C:\Windows\System32" --benign-dir "C:\Program Files"` |
+| train + write the .h5 | `python train_pe.py` |
+
+Samples are held in memory only while their numbers are taken, never saved or run. Use a VM.
+
+How it avoids fooling itself: the split is **by family** (no malware family or software package is in both train and test); each family counts at most 12 programs; scaling is fitted on the training part only and stored in the .h5; dropout + weight decay + early stopping; the report states "overfit" / "underfit" / "balanced"; 5 repeats are reported and the **median** one is shipped; a label-shuffle control must score about 50%.
+
+Shipped model (theZoo: 793 programs from 135 families; clean: 796 programs from 56 packages): test accuracy 93% (repeats 92.8% +- 1.9), train 98%, validation 84%, train/test gap 5 points, shuffle control 56%.
+**Be careful quoting 93%:** the clean files were Python-package binaries, a narrow kind of software, and the test set is only 100 programs. Expect a lower figure on ordinary Windows software; retrain with the Windows folder as the clean set for a trustworthy number. The model is a second opinion: a high score is a "high" finding that holds a download for you, it is never "critical" alone.
+
+## Downloads: one watcher, YARA first, hold what can run
+`downloads.rs` is the ONLY thing that watches Downloads / Desktop (an older second scanner was removed: two scanners opening the same file made other programs reload or freeze).
+1. **Wait** until the download is finished: size and time unchanged, unfinished-download extensions skipped and, on Windows, no other program still has the file open for writing.
+2. **Hold first only what can run** (exe, msi, scripts, shortcuts, Linux programs, disk images ...): it is moved into its own isolation folder as `<name>.held`. Pictures, documents and archives are checked where they are, because moving a file another program uses makes it freeze. Nothing is ever left behind in Downloads (the old "note" file was itself picked up as a new download over and over; leftovers of older versions are deleted at start-up).
+3. **Check:** YARA first (the page shows "YARA: N rules, no match" or the rule names), then hidden data, metadata, the PE model, hashes + signature, then VirusTotal (hash only) and NVD. The file is judged under its real name even while it is held.
+4. **Clean / only vulnerable** (or a harmless picture / document that VirusTotal simply does not know) -> stays where it is, or a held file gets its **normal name back**. **Anything else** -> held (a file that was checked in place is moved into isolation now) and the person decides: **Allow** = normal name back, **Remove** = deleted completely.
+The Downloads detail shows what the content check found: YARA result, findings, **the hidden data itself** (decoded, with the commands / URLs / IPs pulled out), the exiftool-style metadata table and the AI score.
+
+## Steganography and metadata (`stegometa.py`)
+Lists every metadata field like exiftool (uses the real `exiftool` if installed, otherwise a built-in reader for JPEG, PNG, GIF, TIFF, PDF and Office files) and looks inside each field for commands, scripts, base64 / hex / gzip blobs and hidden programs. Pixel hiding (LSB) and data after the end of the file were already covered.
+
+## Command AI (`cmdguard.py`, `aiguard.rs`)
+Every new shell or abused system tool (PowerShell, cmd, bash, certutil, rundll32, vssadmin ...) is read (every 3 seconds in Realtime mode, or when you press Scan now): rules + the script AI + context (an Office program starting a shell) + a behaviour baseline (never-seen program, quiet hour; these only add weight, they never start a verdict). Suspicious -> alert and log. Malicious (score 0.90+) -> the same response modes as Net-Shield: off / suggest / auto, and Windows core programs are never killed.
+
+## Port watch (`portwatch.rs`, page **Port watch**)
+The **Traffic watch** table (`netwatch.rs`: every address the PC talks to) was moved here from the Firewall page.
+Names programs that keep a connection to the internet open 10+ minutes while the PC uploads more than 8 KB/s for 70% of that time, or reconnect 6+ times at a steady interval (heartbeat). Logged and alerted. **Mark OK** keeps the program running and moves it to **Warning** (still tracked and logged, no more alerts); it can be moved back. Limit: upload volume is for the whole PC, not per connection (Windows needs a kernel driver for that).

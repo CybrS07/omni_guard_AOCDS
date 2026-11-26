@@ -1,0 +1,105 @@
+{
+  "netshield_gnn_int8.onnx": {
+    "classes": [
+      "normal",
+      "scanning",
+      "propagating"
+    ],
+    "epochs": 30,
+    "held_out_families": [
+      "b_scan_multiport",
+      "b_worm_http",
+      "b_worm_ssh"
+    ],
+    "int8_fp32_agreement": 0.9999,
+    "int8_known_families": {
+      "bad_graph_recall": 0.9836,
+      "false_alarm_rate_on_normal_graphs": 0.0511,
+      "false_worm_call_rate_on_normal_graphs": 0.0085,
+      "graphs": 600,
+      "node_accuracy": 0.9978,
+      "worm_graph_recall": 0.9665
+    },
+    "int8_unseen_families": {
+      "bad_graph_recall": 0.8842,
+      "false_alarm_rate_on_normal_graphs": 0.0562,
+      "false_worm_call_rate_on_normal_graphs": 0.0112,
+      "graphs": 400,
+      "node_accuracy": 0.9951,
+      "worm_graph_recall": 0.9414
+    },
+    "known_families": {
+      "bad_graph_recall": 0.9808,
+      "false_alarm_rate_on_normal_graphs": 0.0468,
+      "false_worm_call_rate_on_normal_graphs": 0.0085,
+      "graphs": 600,
+      "node_accuracy": 0.9978,
+      "worm_graph_recall": 0.9665
+    },
+    "latency_ms_per_graph_fp32": 0.04,
+    "latency_ms_per_graph_int8": 0.06,
+    "note": "generated traffic; add real captures with --extra-json",
+    "seed": 7,
+    "sha256": "39742bb6c93545ec3ed468c8dd0258fda8953e98e8f00eeb9d86f65dc0bc4f5f",
+    "size_kb_fp32": 20.3,
+    "size_kb_int8": 16.3,
+    "trained_at": 1795704245.2577908,
+    "training_graphs": 5000,
+    "unseen_families": {
+      "bad_graph_recall": 0.8842,
+      "false_alarm_rate_on_normal_graphs": 0.0562,
+      "false_worm_call_rate_on_normal_graphs": 0.0112,
+      "graphs": 400,
+      "node_accuracy": 0.995,
+      "worm_graph_recall": 0.9456
+    }
+  },
+  "sentinel_rf.onnx": {
+    "families_benign": 16,
+    "families_malicious": 17,
+    "in_family_accuracy": 1.0,
+    "note": "generated data; add real entries with --extra-csv",
+    "onnx_max_drift": 5e-05,
+    "samples": 8580,
+    "seed": 7,
+    "sha256": "68cb3ccf07772d6058a8337ac138a3c23755fbe38b4a5000992e7b59816c9124",
+    "trained_at": 1795703231.2090588,
+    "unseen_families": [
+      "b_config_text",
+      "b_rundll_regsvr",
+      "b_update_url",
+      "b_winlogon",
+      "m_b64_cmd",
+      "m_obf_ps",
+      "m_rundll_js",
+      "m_winlogon_extra"
+    ],
+    "unseen_family_accuracy": 0.9452,
+    "unseen_family_false_alarm_rate": 0.0183,
+    "unseen_family_recall": 0.9087
+  },
+  "sentinel_xgb.onnx": {
+    "families_benign": 16,
+    "families_malicious": 17,
+    "in_family_accuracy": 1.0,
+    "note": "generated data; add real entries with --extra-csv",
+    "onnx_max_drift": 5e-05,
+    "samples": 8580,
+    "seed": 7,
+    "sha256": "85a87e71a2360b65ecc8ab3d973a4271fea4a6fb9357fe468c31768bc84824bd",
+    "trained_at": 1795703231.2090588,
+    "unseen_families": [
+      "b_config_text",
+      "b_rundll_regsvr",
+      "b_update_url",
+      "b_winlogon",
+      "m_b64_cmd",
+      "m_obf_ps",
+      "m_rundll_js",
+      "m_winlogon_extra"
+    ],
+    "unseen_family_accuracy": 0.9452,
+    "unseen_family_false_alarm_rate": 0.0183,
+    "unseen_family_recall": 0.9087
+  }
+}

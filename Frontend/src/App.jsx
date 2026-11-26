@@ -4,11 +4,13 @@ import { usePoll } from './api.js'
 import { BootScreen } from './components/Loader.jsx'
 import { ToastProvider } from './components/Feedback.jsx'
 import Icon from './components/Icon.jsx'
+import AIShield from './pages/AIShield.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import Downloads from './pages/Downloads.jsx'
 import Firewall from './pages/Firewall.jsx'
 import Scan from './pages/Scan.jsx'
 import Logs from './pages/Logs.jsx'
+import PortWatch from './pages/PortWatch.jsx'
 import Registry from './pages/Registry.jsx'
 import Settings from './pages/Settings.jsx'
 import System from './pages/System.jsx'
@@ -20,6 +22,8 @@ const NAV = [
   { to: '/downloads', label: 'Downloads', icon: 'download' },
   { to: '/scan', label: 'Scan', icon: 'folder' },
   { to: '/registry', label: 'Registry', icon: 'database' },
+  { to: '/ai-shield', label: 'AI Shield', icon: 'shield' },
+  { to: '/ports', label: 'Port watch', icon: 'server' },
   { to: '/logs', label: 'Logs', icon: 'fileText' },
   { to: '/system', label: 'System', icon: 'box' },
   { to: '/settings', label: 'Settings', icon: 'server' },
@@ -72,6 +76,8 @@ export default function App() {
             <Route path="/downloads" element={<Downloads />} />
             <Route path="/scan" element={<Scan />} />
             <Route path="/registry" element={<Registry />} />
+            <Route path="/ai-shield" element={<AIShield />} />
+            <Route path="/ports" element={<PortWatch />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/system" element={<System />} />
             <Route path="/settings" element={<Settings status={status} />} />

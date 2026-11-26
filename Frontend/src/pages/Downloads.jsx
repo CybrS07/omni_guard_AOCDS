@@ -8,6 +8,7 @@ import { Bars } from '../components/Loader.jsx'
 import { clock } from '../format.js'
 import { copyText } from '../export.js'
 import CheckServices from '../components/CheckServices.jsx'
+import ContentReport from '../components/ContentReport.jsx'
 
 const STATUS = {
   analyzing: ['info', 'Checking…'],
@@ -208,6 +209,7 @@ function Detail({ i }) {
           )}
           {!v.cves?.length && !v.notes?.some((n) => /NVD|CPE|product/i.test(n)) && <div className="hint"><b>No record found</b> in the NVD for this product and version.</div>}
           {v.notes?.map((n) => <div key={n} className="hint">{n}</div>)}
+          <ContentReport content={v.content} />
         </>
       )}
     </div>

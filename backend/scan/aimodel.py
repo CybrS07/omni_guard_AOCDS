@@ -92,6 +92,8 @@ class Model:
         self.w2 = z["w2"]          # int8  (H, C)
         self.s2 = z["s2"]
         self.b2 = z["b2"]
+        # temperature found on held-out data by train_ai.py: > 1 softens over-confident answers (1.0 = unchanged, older files)
+        self.temp = float(z["temp"]) if "temp" in z.files else 1.0
         assert self.w1.dtype == np.int8 and self.w2.dtype == np.int8
 
     def logits(self, idx: np.ndarray, val: np.ndarray) -> np.ndarray:
@@ -104,7 +106,7 @@ class Model:
 
     def predict(self, text: str) -> dict:
         idx, val = featurize(text)
-        z = self.logits(idx, val)
+        z = self.logits(idx, val) / max(self.temp, 1e-3)
         e = np.exp(z - z.max())
         p = e / e.sum()
         k = int(p.argmax())
@@ -138,4 +140,5 @@ def reload() -> None:
     """Forget the loaded model so the next call loads the current file (hot swap)."""
     global _model, _failed
     _model = None
+    _failed = False   # a model that failed to load once (for example a bad update) must get another chance after the file is replaced
     _failed = False

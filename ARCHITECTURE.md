@@ -149,7 +149,7 @@ Data on disk (`data_dir`, default `C:\ProgramData\SocMonitor`): `logs/*.txt`, `a
 | Page | Calls |
 |---|---|
 | `Dashboard.jsx` | agent: `/metrics`, `/alerts`. Uses `AreaChart`, `Gauge`, `StatusPill`. |
-| `Firewall.jsx` | agent: `/firewall*`, `/firewall/port/*`, `/firewall/clear`, `/dns/resolve`, `/metrics`, `/alerts`. Uses `BlockIp`, `TrafficWatch`. |
+| `Firewall.jsx` | agent: `/firewall*`, `/firewall/port/*`, `/firewall/clear`, `/dns/resolve`, `/metrics`, `/alerts`. Uses `BlockIp`. |
 | `Downloads.jsx` | agent: `/downloads`, `/downloads/decision` (Allow / Remove). Uses `CheckServices`. |
 | `Scan.jsx` | agent: `/filescan/browse|start|status|cancel|monitor`, `/software/rescan`. Uses `FolderPicker`, `SoftwarePanel`, `ExportBar`. |
 including the scan-service log (`scan.txt`
@@ -162,7 +162,7 @@ including the scan-service log (`scan.txt`
 | `CheckServices.jsx` | Python `/intel/hash`, `/intel/software`, `/intel/domain`, `/intel/status`. |
 | `KeysForm.jsx` | Python `/intel/status`, `/intel/config` (writes `.env`). |
 | `SoftwarePanel.jsx` | agent `/software`: installed programs, CVEs, patch info. |
-| `TrafficWatch.jsx` | agent `/netwatch`. |
+| `TrafficWatch.jsx` | agent `/netwatch`. Shown on the Port watch page. |
 | `FolderPicker.jsx` | agent `/filescan/browse` (server-side folder list; a browser cannot give real paths). |
 | `EventsPanel.jsx` | agent `/events` (Windows events). |
 | `BlockIp.jsx` | agent `/firewall/block-ip`. |

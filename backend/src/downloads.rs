@@ -1,67 +1,73 @@
-//! Download monitor: the "brain" that ties the steps together. Runs inside the agent, so when the
-//! agent is installed as a Windows service this is the service that watches downloads.
+//! Download guard: the ONLY thing that watches Downloads / Desktop. It runs inside the agent.
 //!
-//!   1. WATCH    new program/installer files appear in Downloads / Desktop      (this file)
-//!   2. ISOLATE  move the file into its own quarantine folder                   (isolation.rs)
-//!   (every downloaded file is captured, including Linux files; see SKIP_EXTS)
-//!   3. EXTRACT  name, version, SHA-256, publisher signature                    (fileinfo.rs)
-//!   4. ASK      send the details to Python for VirusTotal + NVD checks         (intel_client.rs)
-//!   5. DECIDE   clean / vulnerable -> release the file (vulnerable is also flagged)
-//!               malware / suspicious / unverified -> pop up an alert (alert.rs) and wait:
-//!                   Allow  -> release the file          Remove -> delete it completely
+//!   1. WATCH    a new file appears and stops growing (and, on Windows, no program has it open any more)
+//!   2. HOLD     programs and scripts are moved into isolation FIRST, so nobody can run them before the check
+//!               (pictures, documents, archives are checked where they are: moving a file that another program is using makes it freeze)
+//!   3. CHECK    YARA first, then hidden data / metadata / AI / hashes / signature (filescan.rs + the Python scan service)
+//!   4. ASK      VirusTotal (hash only) and NVD (known vulnerabilities)
+//!   5. DECIDE   clean or vulnerable -> the file stays / is released with its normal name
+//!               malware, suspicious or unverified -> the file is held and the user chooses:
+//!                   Allow  -> the file gets its normal name back          Remove -> the file is deleted completely
 
-use crate::config::Config;
-use crate::fileinfo::{self, FileInfo};
-use crate::state::AppState;
-use crate::util::now_iso;
-use crate::{alert, intel_client, isolation};
-use rand::{distributions::Alphanumeric, Rng};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, SystemTime};
+use crate::config::Config; // agent settings
+use crate::fileinfo::{self, FileInfo}; // name, version, hash and signature of a file
+use crate::state::AppState; // shared state (logs, alerts)
+use crate::util::now_iso; // current time as text
+use crate::{alert, intel_client, isolation}; // popup, Python client, quarantine
+use rand::{distributions::Alphanumeric, Rng}; // random ids
+use serde::{Deserialize, Serialize}; // saving the list as json
+use serde_json::Value; // json answers from Python
+use std::collections::{HashMap, HashSet}; // bookkeeping
+use std::path::{Path, PathBuf}; // file paths
+use std::sync::{Arc, Mutex}; // sharing and locking
+use std::thread; // background threads
+use std::time::{Duration, SystemTime}; // timing
 
-/// By default EVERY file that lands in a watched folder is captured and checked, whatever its name:
-/// Windows programs and installers, Linux programs (.sh, .deb, .rpm, .AppImage, .run, ELF files with no extension at all),
-/// scripts, Office / PDF files, disk images, archives. The agent finds out what a file really is from its first bytes, not from its name.
-/// Only files a browser is still writing, and Windows' own housekeeping files, are skipped.
-/// (If `download_extensions` is set in config.json, only those extensions are captured instead.)
-const SKIP_EXTS: &[&str] = &["crdownload", "part", "partial", "download", "opdownload", "tmp", "temp", "ini", "db", "lock", "swp"];
+/// Files a browser is still writing, and Windows housekeeping files, are never captured.
+const SKIP_EXTS: &[&str] = &["crdownload", "part", "partial", "download", "opdownload", "tmp", "temp", "ini", "db", "lock", "swp", "unconfirmed", "!qb", "aria2", "filepart", "bc!"];
 const SKIP_NAMES: &[&str] = &["desktop.ini", "thumbs.db", ".ds_store"];
+/// Files that can RUN. These are held in isolation before they are checked. A file with no extension at all (a Linux program) counts too.
+const RUNNABLE: &[&str] = &[
+    "exe", "dll", "msi", "msix", "scr", "com", "bat", "cmd", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "hta", "jar", "lnk", "cpl", "reg",
+    "sh", "run", "bin", "deb", "rpm", "appimage", "apk", "iso", "img", "dmg", "pkg",
+];
+const MAX_ITEMS: usize = 200; // the list keeps the 200 newest downloads
 
 /// "*.exe", "*exe", ".exe" and "EXE" all mean the extension `exe`.
 fn clean_ext(s: &str) -> String {
     s.trim().trim_start_matches('*').trim_start_matches('.').to_lowercase()
 }
-const MAX_ITEMS: usize = 200;
+
+/// Should this file be held in isolation BEFORE it is checked? Yes for anything that can run.
+fn hold_first(path: &Path) -> bool {
+    match path.extension().map(|e| e.to_string_lossy().to_lowercase()) {
+        Some(e) => RUNNABLE.contains(&e.as_str()), // known runnable type
+        None => true, // no extension: could be a Linux program
+    }
+}
 
 // ------------------------------------------------------------------ data kept for every download
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Item {
-    pub id: String,
-    pub name: String,
-    pub original_path: String,
-    pub held_path: String,
-    /// analyzing | awaiting_user | allowed | allowed_vulnerable | allowed_by_user | removed | error
-    pub status: String,
-    pub detected_at: String,
-    pub resolved_at: Option<String>,
-    pub info: FileInfo,
-    /// the full answer from Python (verdict, summary, vt, cves, ...)
-    pub verdict: Option<Value>,
-    pub note: String,
+    pub id: String,                // random id
+    pub name: String,              // file name
+    pub original_path: String,     // where the file was (and will be again)
+    pub held_path: String,         // where it is held now; empty when it is not isolated
+    pub status: String,            // analyzing | awaiting_user | allowed | allowed_vulnerable | allowed_by_user | removed | error
+    pub detected_at: String,       // when it was noticed
+    pub resolved_at: Option<String>, // when it was decided
+    pub info: FileInfo,            // hash, version, signature
+    pub verdict: Option<Value>,    // the full answer (verdict, summary, vt, cves, content)
+    pub note: String,              // one sentence for the user
 }
 
 impl Item {
-    /// Returns the verdict word (such as clean or malware) from the stored answer, or an empty text if there is none.
+    /// The verdict word (clean, malware, ...) or an empty text.
     fn verdict_name(&self) -> String {
         self.verdict.as_ref().and_then(|v| v["verdict"].as_str()).unwrap_or("").to_string()
     }
-    /// Returns the short human summary from the stored answer, or the note if there is no summary.
+    /// The short summary, or the note when there is none.
     fn summary(&self) -> String {
         self.verdict.as_ref().and_then(|v| v["summary"].as_str()).unwrap_or(&self.note).to_string()
     }
@@ -69,40 +75,47 @@ impl Item {
 
 /// All downloads the agent has handled, saved to <data_dir>/isolation/index.json.
 pub struct Store {
-    root: PathBuf,
-    items: Mutex<Vec<Item>>,
-    /// paths we put back ourselves: do not treat them as new downloads
-    ignore: Mutex<HashSet<PathBuf>>,
+    pub(crate) root: PathBuf,         // the isolation folder
+    items: Mutex<Vec<Item>>,          // the list
+    ignore: Mutex<HashSet<PathBuf>>,  // paths we put back ourselves: not new downloads
 }
 
 impl Store {
-    /// Opens the download store, loading the saved list from index.json if that file already exists.
+    /// Opens the store and loads the saved list.
     pub fn new(root: PathBuf) -> Store {
         let items: Vec<Item> = std::fs::read_to_string(root.join("index.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
         Store { root, items: Mutex::new(items), ignore: Mutex::new(HashSet::new()) }
     }
 
-    /// Returns a copy of all downloads, newest first.
+    /// A copy of all downloads, newest first.
     pub fn list(&self) -> Vec<Item> {
         let mut v = self.items.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        v.reverse(); // newest first
+        v.reverse();
         v
     }
 
-    /// Finds one download by its id and returns a copy of it, or nothing if it is not in the list.
+    /// One download by id.
     fn get(&self, id: &str) -> Option<Item> {
         self.items.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|i| i.id == id).cloned()
     }
 
-    /// Insert or replace, then save to disk.
+    /// Saves the list to disk.
+    fn write(&self, v: &[Item]) {
+        let _ = std::fs::create_dir_all(&self.root); // make sure the folder exists
+        if let Ok(text) = serde_json::to_string_pretty(v) {
+            let _ = std::fs::write(self.root.join("index.json"), text);
+        }
+    }
+
+    /// Inserts or replaces one item, then saves.
     fn put(&self, item: Item) {
         let mut v = self.items.lock().unwrap_or_else(|e| e.into_inner());
         match v.iter_mut().find(|i| i.id == item.id) {
-            Some(slot) => *slot = item,
-            None => v.push(item),
+            Some(slot) => *slot = item, // replace
+            None => v.push(item),       // insert
         }
         while v.len() > MAX_ITEMS {
-            // forget the oldest finished entry; never one that is still waiting for the user
+            // forget the oldest finished entry, never one that still waits for the user
             match v.iter().position(|i| i.status != "awaiting_user" && i.status != "analyzing") {
                 Some(p) => {
                     v.remove(p);
@@ -110,38 +123,43 @@ impl Store {
                 None => break,
             }
         }
-        let _ = std::fs::create_dir_all(&self.root);
-        if let Ok(text) = serde_json::to_string_pretty(&*v) {
-            let _ = std::fs::write(self.root.join("index.json"), text);
-        }
+        self.write(&v);
     }
 
-    /// Take one entry out of the list and save the list again.
+    /// Takes one entry out of the list.
     fn forget(&self, id: &str) {
         let mut v = self.items.lock().unwrap_or_else(|e| e.into_inner());
         v.retain(|i| i.id != id);
-        if let Ok(text) = serde_json::to_string_pretty(&*v) {
-            let _ = std::fs::write(self.root.join("index.json"), text);
-        }
+        self.write(&v);
     }
 
-    /// Files whose hash we already approved are not checked again.
+    /// Files whose hash was approved before are not checked again.
     fn approved(&self, sha: &str) -> bool {
         self.items.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|i| i.info.sha256 == sha && i.status.starts_with("allowed"))
+    }
+
+    /// Remembers a path so the watcher does not treat it as a new download.
+    fn ignore_path(&self, p: PathBuf) {
+        self.ignore.lock().unwrap_or_else(|e| e.into_inner()).insert(p);
+    }
+
+    /// Was this path put back by us?
+    fn is_ignored(&self, p: &Path) -> bool {
+        self.ignore.lock().unwrap_or_else(|e| e.into_inner()).contains(p)
     }
 }
 
 // ------------------------------------------------------------------ 1. WATCH
 
-/// Folders to watch: `watch_dirs` from config.json, otherwise Downloads + Desktop of every user.
+/// Folders to watch: `watch_dirs` from the settings or config.json, otherwise Downloads + Desktop of every user.
 pub fn watch_dirs(cfg: &Config) -> Vec<PathBuf> {
     if let Some(v) = crate::settings::watch_dirs_override() {
-        return v;
+        return v; // chosen in the dashboard
     }
     if !cfg.watch_dirs.is_empty() {
-        return cfg.watch_dirs.iter().map(PathBuf::from).collect();
+        return cfg.watch_dirs.iter().map(PathBuf::from).collect(); // chosen in config.json
     }
-    let mut homes: Vec<PathBuf> = Vec::new();
+    let mut homes: Vec<PathBuf> = Vec::new(); // home folders of the users
     if cfg!(windows) {
         if let Ok(rd) = std::fs::read_dir(r"C:\Users") {
             homes.extend(rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()));
@@ -151,7 +169,7 @@ pub fn watch_dirs(cfg: &Config) -> Vec<PathBuf> {
     }
     let mut dirs: Vec<PathBuf> = homes.iter().flat_map(|h| [h.join("Downloads"), h.join("Desktop")]).filter(|p| p.is_dir()).collect();
     if cfg.watch_wsl && cfg!(windows) {
-        dirs.extend(wsl_dirs());
+        dirs.extend(wsl_dirs()); // folders inside running WSL distributions
     }
     dirs
 }
@@ -161,20 +179,19 @@ pub fn parse_wsl_list(raw: &str) -> Vec<String> {
     raw.replace('\0', "").lines().map(|l| l.trim().trim_start_matches('\u{feff}').to_string()).filter(|l| !l.is_empty()).collect()
 }
 
-/// Downloads/Desktop folders inside RUNNING WSL distributions (reached as \\wsl.localhost\<distro>\...).
-/// Only running distros are listed, so watching never wakes a stopped one. Cached for a minute.
+/// Downloads/Desktop folders inside RUNNING WSL distributions. Only running ones are listed, so watching never wakes a stopped one. Cached for a minute.
 fn wsl_dirs() -> Vec<PathBuf> {
-    static CACHE: Mutex<Option<(std::time::Instant, Vec<PathBuf>)>> = Mutex::new(None);
+    static CACHE: Mutex<Option<(std::time::Instant, Vec<PathBuf>)>> = Mutex::new(None); // (when, folders)
     let mut c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((t, v)) = c.as_ref() {
         if t.elapsed() < Duration::from_secs(60) {
-            return v.clone();
+            return v.clone(); // still fresh
         }
     }
     let mut out = Vec::new();
     if let Some(o) = crate::util::run("wsl.exe", &["-l", "--running", "-q"], 10).filter(|o| o.ok) {
         for distro in parse_wsl_list(&o.stdout) {
-            let root = PathBuf::from(format!(r"\\wsl.localhost\{distro}"));
+            let root = PathBuf::from(format!(r"\\wsl.localhost\{distro}")); // the distribution's files
             let mut homes = vec![root.join("root")];
             if let Ok(rd) = std::fs::read_dir(root.join("home")) {
                 homes.extend(rd.flatten().map(|e| e.path()));
@@ -186,29 +203,51 @@ fn wsl_dirs() -> Vec<PathBuf> {
     out
 }
 
-/// Should this file be captured? With no extension list (the default): every file except unfinished downloads and housekeeping files.
-/// With a list from config.json: only those extensions, ignoring letter case.
+/// Is the download really finished? On Windows a browser keeps the file open for writing until the last byte is written.
+/// Opening it for reading while allowing other readers fails only while a writer still has it, and never blocks anybody else.
+fn download_finished(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt; // gives us share_mode
+        std::fs::OpenOptions::new().read(true).share_mode(1).open(path).is_ok() // 1 = FILE_SHARE_READ
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::File::open(path).is_ok()
+    }
+}
+
+/// Should this file be captured? Everything except unfinished downloads, housekeeping files and our own old note files.
+/// With an extension list in config.json: only those extensions.
 fn wanted(path: &Path, exts: &[String]) -> bool {
+    if isolation::is_leftover_note(path) {
+        return false; // a note file left by an older version is never a download
+    }
     let name = path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
     if name.is_empty() || SKIP_NAMES.contains(&name.as_str()) || name.starts_with("~$") {
         return false;
     }
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase());
     if exts.is_empty() {
-        return !ext.as_deref().map_or(false, |e| SKIP_EXTS.contains(&e));
+        return !ext.as_deref().map_or(false, |e| SKIP_EXTS.contains(&e)); // default: everything finished
     }
     ext.map_or(false, |e| exts.iter().any(|x| e.eq_ignore_ascii_case(x)))
 }
 
-/// Starts the download watcher thread, and asks again about any downloads that were waiting when the agent restarted.
+/// Starts the watcher thread, cleans up old note files, and asks again about downloads that were waiting when the agent restarted.
 pub fn spawn(st: Arc<AppState>) {
-    // After a restart, items that were still waiting for the user ask again.
+    for dir in watch_dirs(&st.cfg) {
+        let n = isolation::clean_leftovers(&dir); // remove "x.soc-pending.txt.soc-pending.txt..." files from older versions
+        if n > 0 {
+            st.log("apps", "INFO", format!("DOWNLOAD_CLEANUP removed {n} leftover note file(s) from {}", dir.display()));
+        }
+    }
     for it in st.downloads.list() {
         match it.status.as_str() {
             "analyzing" => {
                 let mut it = it;
-                it.status = "awaiting_user".into();
-                it.note = "The check was interrupted (agent restarted). The file is still isolated.".into();
+                it.status = "awaiting_user".into(); // the check was interrupted
+                it.note = "The check was interrupted (agent restarted). The file stays where it is until you decide.".into();
                 st.downloads.put(it.clone());
                 prompt_async(st.clone(), it.id);
             }
@@ -216,23 +255,18 @@ pub fn spawn(st: Arc<AppState>) {
             _ => {}
         }
     }
-    thread::Builder::new()
-        .name("downloads".into())
-        .spawn(move || watch_loop(st))
-        .expect("spawn downloads watcher");
+    thread::Builder::new().name("downloads".into()).spawn(move || watch_loop(st)).expect("spawn downloads watcher");
 }
 
-/// Loop that checks the watched folders about every 2 seconds and starts processing files that have finished downloading.
+/// Checks the watched folders every 3 seconds and starts the pipeline for files that have finished downloading.
 fn watch_loop(st: Arc<AppState>) {
     let exts: Vec<String> = st.cfg.download_extensions.iter().map(|e| clean_ext(e)).filter(|e| !e.is_empty()).collect(); // empty = capture everything
-    // path -> (size, modified, how many checks in a row it did not change)
-    let mut pending: HashMap<PathBuf, (u64, Option<SystemTime>, u8)> = HashMap::new();
-    let mut known: HashSet<PathBuf> = HashSet::new();
-    let mut first = true;
-
+    let mut pending: HashMap<PathBuf, (u64, Option<SystemTime>, u8)> = HashMap::new(); // path -> (size, modified, unchanged checks)
+    let mut known: HashSet<PathBuf> = HashSet::new(); // files already handled or present at start
+    let mut first = true; // the first round only records what is already there
     loop {
         if !crate::settings::enabled("downloads") {
-            std::thread::sleep(Duration::from_secs(2));
+            thread::sleep(Duration::from_secs(3));
             continue;
         }
         crate::settings::beat("downloads");
@@ -244,88 +278,83 @@ fn watch_loop(st: Arc<AppState>) {
             let Ok(rd) = std::fs::read_dir(dir) else { continue };
             for entry in rd.flatten() {
                 let path = entry.path();
-                if !path.is_file() || !wanted(&path, &exts) || known.contains(&path) {
-                    continue;
+                if known.contains(&path) || !path.is_file() || !wanted(&path, &exts) {
+                    continue; // already known, not a file, or not wanted
                 }
-                if first {
-                    known.insert(path); // files that were already there when we started are not "downloads"
-                    continue;
-                }
-                if st.downloads.ignore.lock().unwrap_or_else(|e| e.into_inner()).contains(&path) {
-                    known.insert(path);
+                if first || st.downloads.is_ignored(&path) {
+                    known.insert(path); // present at start, or put back by us: not a download
                     continue;
                 }
                 let Ok(meta) = entry.metadata() else { continue };
-                let sig = (meta.len(), meta.modified().ok());
+                let sig = (meta.len(), meta.modified().ok()); // size and time of last change
                 let slot = pending.entry(path.clone()).or_insert((sig.0, sig.1, 0));
                 if (slot.0, slot.1) == sig && sig.0 > 0 {
-                    slot.2 += 1;
+                    slot.2 += 1; // unchanged since the last check
                 } else {
-                    *slot = (sig.0, sig.1, 0);
+                    *slot = (sig.0, sig.1, 0); // still changing: start counting again
                 }
-                // unchanged for two checks in a row (~4 s) = the browser has finished writing it
-                if slot.2 >= 2 && std::fs::File::open(&path).is_ok() {
-                    pending.remove(&path);
+                if slot.2 >= 2 && download_finished(&path) {
+                    pending.remove(&path); // unchanged for ~6 s and not open for writing: finished
                     known.insert(path.clone());
                     let s = st.clone();
-                    thread::spawn(move || process(s, path));
+                    thread::spawn(move || process(s, path)); // one thread per file so a big scan does not block the watcher
                 }
             }
         }
-        // forget files that vanished (so a re-download with the same name is noticed again)
-        known.retain(|p| p.exists());
+        known.retain(|p| p.exists()); // forget files that vanished so a re-download is noticed
         pending.retain(|p, _| p.exists());
         first = false;
-        thread::sleep(Duration::from_secs(2));
+        thread::sleep(Duration::from_secs(3));
     }
 }
 
 // ------------------------------------------------------------------ 2-5. the pipeline for one file
 
-/// Runs the full pipeline for one new file: skip it if already approved, extract its details, isolate it, check it, then allow or hold it.
+/// Runs the whole pipeline for one new file.
 fn process(st: Arc<AppState>, path: PathBuf) {
-    // Already approved before? (same bytes) -> leave it alone.
     if let Ok((sha, _)) = fileinfo::hash_file(&path) {
         if st.downloads.approved(&sha) {
             st.log("apps", "INFO", format!("DOWNLOAD_SKIPPED {} already approved (sha256 {})", path.display(), &sha[..12]));
-            return;
+            return; // the same bytes were approved before
         }
     }
-    let id: String = rand::thread_rng().sample_iter(&Alphanumeric).take(10).map(char::from).collect();
+    let id: String = rand::thread_rng().sample_iter(&Alphanumeric).take(10).map(char::from).collect(); // id of this download
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-
-    // 3. EXTRACT first (cheap, and the file is still where it was)
     let info = match fileinfo::extract(&path) {
-        Ok(i) => i,
+        Ok(i) => i, // name, version, sha256, signature
         Err(e) => return st.log("apps", "WARN", format!("DOWNLOAD_ERROR {name}: {e}")),
     };
 
-    // 2. ISOLATE
-    let held = match isolation::isolate(&st.downloads.root, &id, &path) {
-        Ok(h) => h,
-        Err(e) => return st.log("apps", "WARN", format!("DOWNLOAD_ERROR could not isolate {name}: {e}")),
-    };
+    // 2. HOLD first, but only what can run
+    let mut held = String::new(); // stays empty while the file is not isolated
+    if hold_first(&path) {
+        match isolation::isolate(&st.downloads.root, &id, &path) {
+            Ok(h) => held = h.to_string_lossy().into_owned(),
+            Err(e) => return st.log("apps", "WARN", format!("DOWNLOAD_ERROR could not isolate {name}: {e}")),
+        }
+    }
     let mut item = Item {
         id: id.clone(),
         name: name.clone(),
         original_path: path.to_string_lossy().into_owned(),
-        held_path: held.to_string_lossy().into_owned(),
+        held_path: held.clone(),
         status: "analyzing".into(),
         detected_at: now_iso(),
         resolved_at: None,
         info: info.clone(),
         verdict: None,
-        note: "Isolated, checking VirusTotal and NVD...".into(),
+        note: "Checking with YARA, hidden-data and AI checks, then VirusTotal and NVD...".into(),
     };
     st.downloads.put(item.clone());
-    st.log("apps", "INFO", format!("DOWNLOAD_ISOLATED {name} sha256={} version={} signed={} signer={:?}", info.sha256, info.version, info.signed, info.signer));
+    st.log("apps", "INFO", format!("DOWNLOAD_CHECKING {name} held={} sha256={} version={} signed={}", !held.is_empty(), info.sha256, info.version, info.signed));
 
-    // 3b. LOOK INSIDE the isolated file: YARA, hidden scripts, programs hidden in other files, disguised names, hashes, signature.
-    // This works for Windows AND Linux files (ELF programs, shell scripts, .deb/.rpm contents are recognised by their bytes).
-    let mut py_state = 0u8;
-    let content = crate::filescan::scan_file(&st, &held, false, &mut py_state);
+    // 3. CHECK: YARA first (inside scan_file), judged under the file's REAL name
+    let scan_path = if held.is_empty() { path.clone() } else { PathBuf::from(&held) }; // where the bytes are right now
+    let mut py_state = 0u8; // counts failed calls to the Python service
+    let content = crate::filescan::scan_file_as(&st, &scan_path, &name, false, &mut py_state);
+    crate::filescan::remember_download(&st, content.clone()); // show it on the Scan page too
 
-    // 4. ASK Python (VirusTotal by hash + NVD). VirusTotal is the second opinion, after the content check above.
+    // 4. ASK Python for VirusTotal + NVD
     match intel_client::analyze(&st.cfg.intel_url, &info) {
         Ok(mut v) => {
             if content.verdict != "clean" {
@@ -336,62 +365,95 @@ fn process(st: Arc<AppState>, path: PathBuf) {
                     v["verdict"] = if content.verdict == "malicious" { "malware".into() } else if v["verdict"] == "clean" || v["verdict"] == "vulnerable" { "suspicious".into() } else { v["verdict"].clone() };
                 }
             }
+            // keep what the content check found so the dashboard can SHOW it next to the decision
+            v["content"] = serde_json::json!({
+                "kind": content.kind, "verdict": content.verdict, "score": content.score, "findings": content.findings, "hidden": content.hidden,
+                "metadata": content.metadata, "pe_ai": content.pe_ai, "yara": content.yara, "note": content.note,
+            });
             item.verdict = Some(v);
         }
         Err(e) => {
-            item.status = "awaiting_user".into();
-            item.note = format!("Could not be checked ({e}). The file stays isolated until you decide.");
-            st.downloads.put(item.clone());
-            st.alert("downloads", "medium", format!("Download not verified: {name}"), item.note.clone(), None, &format!("dl-{id}"), 1);
-            return prompt_async(st, id);
+            // VirusTotal / NVD could not be reached (offline PC, no key). YARA and the content check already ran.
+            if content.verdict == "clean" && !hold_first(&path) {
+                // a picture / document / archive with a clean content check is not worth stopping: it stays where it is
+                item.verdict = Some(serde_json::json!({
+                    "verdict": "clean", "summary": format!("YARA and the content check found nothing. VirusTotal / NVD could not be reached ({e})."),
+                    "content": { "kind": content.kind, "verdict": content.verdict, "score": content.score, "findings": content.findings, "hidden": content.hidden,
+                                 "metadata": content.metadata, "pe_ai": content.pe_ai, "yara": content.yara, "note": content.note },
+                }));
+                if let Err(e) = finish_clean(&st, &mut item, "allowed") {
+                    st.log("apps", "WARN", format!("DOWNLOAD_ERROR {name}: {e}"));
+                }
+                return;
+            }
+            // a program or script that could not be fully checked stays held until the user decides
+            item.note = format!("Could not be fully checked ({e}). The file stays held until you decide.");
+            return hold_for_user(&st, item, "medium", format!("Download not verified: {name}"));
         }
     }
 
     // 5. DECIDE
     let verdict = item.verdict_name();
-    match verdict.as_str() {
-        "clean" | "vulnerable" => {
-            let vulnerable = verdict == "vulnerable";
-            match release_item(&st, &mut item, if vulnerable { "allowed_vulnerable" } else { "allowed" }) {
-                Ok(()) => {
-                    if vulnerable {
-                        let patch = item.verdict.as_ref().map_or(false, |v| v["patch_available"].as_bool().unwrap_or(false));
-                        st.alert(
-                            "downloads",
-                            "medium",
-                            format!("Saved, but has known vulnerabilities: {name}"),
-                            format!("{} {}", item.summary(), if patch { "Update it when you can." } else { "" }),
-                            None,
-                            &format!("dl-{id}"),
-                            1,
-                        );
-                    }
+    // "unverified" (unsigned and unknown to VirusTotal) is normal for pictures, documents and archives, so a clean content check is enough for them
+    let harmless_unverified = verdict == "unverified" && content.verdict == "clean" && !hold_first(&path);
+    if verdict == "clean" || verdict == "vulnerable" || harmless_unverified {
+        let vulnerable = verdict == "vulnerable";
+        match finish_clean(&st, &mut item, if vulnerable { "allowed_vulnerable" } else { "allowed" }) { // stays in place, or gets its normal name back
+            Ok(()) => {
+                if vulnerable {
+                    let patch = item.verdict.as_ref().map_or(false, |v| v["patch_available"].as_bool().unwrap_or(false));
+                    st.alert("downloads", "medium", format!("Saved, but has known vulnerabilities: {name}"), format!("{} {}", item.summary(), if patch { "Update it when you can." } else { "" }), None, &format!("dl-{id}"), 1);
                 }
-                Err(e) => st.log("apps", "WARN", format!("DOWNLOAD_ERROR could not release {name}: {e}")),
             }
+            Err(e) => st.log("apps", "WARN", format!("DOWNLOAD_ERROR could not release {name}: {e}")),
         }
-        _ => {
-            // malware, suspicious or unverified: keep isolated, tell the user, wait for the answer
-            item.status = "awaiting_user".into();
-            item.note = item.summary();
-            st.downloads.put(item.clone());
-            let sev = if verdict == "unverified" { "medium" } else { "high" };
-            st.alert("downloads", sev, format!("{} download held: {name}", capitalise(&verdict)), item.note.clone(), None, &format!("dl-{id}"), 1);
-            prompt_async(st, id);
-        }
+    } else {
+        item.note = item.summary();
+        let sev = if verdict == "unverified" { "medium" } else { "high" };
+        hold_for_user(&st, item, sev, format!("{} download held: {name}", capitalise(&verdict)));
     }
 }
 
-/// Turns the first letter of a word into a capital letter, for example 'malware' becomes 'Malware'.
+/// Keeps the file held (isolating it now if it was checked in place), tells the user and waits for Allow / Remove.
+fn hold_for_user(st: &Arc<AppState>, mut item: Item, severity: &str, title: String) {
+    if item.held_path.is_empty() {
+        // the file was checked where it was; now that it is not clean, move it away so it cannot be run
+        match isolation::isolate(&st.downloads.root, &item.id, Path::new(&item.original_path)) {
+            Ok(h) => item.held_path = h.to_string_lossy().into_owned(),
+            Err(e) => item.note = format!("{} (could not be isolated: {e})", item.note), // it stays in place; the user is still asked
+        }
+    }
+    item.status = "awaiting_user".into();
+    st.downloads.put(item.clone());
+    st.alert("downloads", severity, title, item.note.clone(), None, &format!("dl-{}", item.id), 1);
+    prompt_async(st.clone(), item.id);
+}
+
+/// A clean file: it stays where it is, or (if it was held first) gets its normal name back.
+fn finish_clean(st: &AppState, item: &mut Item, status: &str) -> Result<(), String> {
+    if item.held_path.is_empty() {
+        st.downloads.ignore_path(PathBuf::from(&item.original_path)); // nothing moved, nothing to put back
+        item.status = status.into();
+        item.resolved_at = Some(now_iso());
+        item.note = item.summary();
+        st.downloads.put(item.clone());
+        st.log("apps", "INFO", format!("DOWNLOAD_{} {} left in place ({})", status.to_uppercase(), item.name, item.note));
+        Ok(())
+    } else {
+        release_item(st, item, status)
+    }
+}
+
+/// Turns the first letter of a word into a capital letter.
 fn capitalise(s: &str) -> String {
     let mut c = s.chars();
     c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
 }
 
-/// Moves an isolated file back to its original place and records its new status in the list and the log.
+/// Moves a held file back to its original place under its NORMAL name and records the new status.
 fn release_item(st: &AppState, item: &mut Item, status: &str) -> Result<(), String> {
-    let dest = isolation::release(Path::new(&item.held_path), Path::new(&item.original_path))?;
-    st.downloads.ignore.lock().unwrap_or_else(|e| e.into_inner()).insert(dest.clone());
+    let dest = isolation::release(Path::new(&item.held_path), Path::new(&item.original_path))?; // the file is back, no .held and no note
+    st.downloads.ignore_path(dest.clone()); // the watcher must not treat it as new
     item.status = status.into();
     item.resolved_at = Some(now_iso());
     item.held_path = String::new();
@@ -404,7 +466,7 @@ fn release_item(st: &AppState, item: &mut Item, status: &str) -> Result<(), Stri
 
 // ------------------------------------------------------------------ the user's decision
 
-/// Allow = release the file; otherwise delete it completely. Only works while it is awaiting a decision,
+/// Allow = the file gets its normal name back; otherwise it is deleted completely. Only works while it waits for a decision,
 /// so answering the popup and the dashboard at the same time cannot do both.
 pub fn resolve(st: &AppState, id: &str, allow: bool, via: &str) -> Result<Item, String> {
     let mut item = st.downloads.get(id).ok_or("unknown download")?;
@@ -412,9 +474,13 @@ pub fn resolve(st: &AppState, id: &str, allow: bool, via: &str) -> Result<Item, 
         return Err("this download has already been decided".into());
     }
     if allow {
-        release_item(st, &mut item, "allowed_by_user")?;
+        if item.held_path.is_empty() {
+            finish_clean(st, &mut item, "allowed_by_user")?; // it never left its place
+        } else {
+            release_item(st, &mut item, "allowed_by_user")?; // normal name back
+        }
     } else {
-        isolation::destroy(Path::new(&item.held_path), Path::new(&item.original_path))?;
+        delete_file(&item)?; // delete the held file (or the file in place)
         item.status = "removed".into();
         item.resolved_at = Some(now_iso());
         item.held_path = String::new();
@@ -425,10 +491,21 @@ pub fn resolve(st: &AppState, id: &str, allow: bool, via: &str) -> Result<Item, 
     Ok(item)
 }
 
-/// "Remove" button in the dashboard: delete the file (if it is still on disk) and forget the entry.
-/// - a file still held in isolation is destroyed
-/// - a file that was saved is deleted from its folder, but only if it is still the same file (same SHA-256)
-/// - the list entry always disappears, so the page shows nothing about it afterwards
+/// Deletes the file of an item: the held copy, or the file in its folder when it was never moved.
+fn delete_file(item: &Item) -> Result<(), String> {
+    if !item.held_path.is_empty() {
+        isolation::destroy(Path::new(&item.held_path)) // held copy
+    } else {
+        let p = Path::new(&item.original_path);
+        if p.is_file() {
+            std::fs::remove_file(p).map_err(|e| format!("could not delete the file: {e}"))?; // file in place
+        }
+        Ok(())
+    }
+}
+
+/// "Remove" button in the dashboard: deletes the file (if it is still on disk) and forgets the entry.
+/// A saved file is deleted only if it is still the same file (same SHA-256).
 pub fn remove_entry(st: &AppState, id: &str) -> Result<String, String> {
     let item = st.downloads.get(id).ok_or("unknown download")?;
     if item.status == "analyzing" {
@@ -436,7 +513,7 @@ pub fn remove_entry(st: &AppState, id: &str) -> Result<String, String> {
     }
     let mut message = String::from("Removed from the list.");
     if !item.held_path.is_empty() {
-        isolation::destroy(Path::new(&item.held_path), Path::new(&item.original_path))?;
+        isolation::destroy(Path::new(&item.held_path))?; // held file
         message = "The held file was deleted completely.".into();
     } else if item.status.starts_with("allowed") {
         let path = Path::new(&item.original_path);
@@ -455,12 +532,12 @@ pub fn remove_entry(st: &AppState, id: &str) -> Result<String, String> {
     Ok(message)
 }
 
-/// Show the Windows popup on its own thread (it waits for the user) and apply the answer.
+/// Shows the Windows popup on its own thread (it waits for the user) and applies the answer.
 fn prompt_async(st: Arc<AppState>, id: String) {
     thread::spawn(move || {
         let Some(item) = st.downloads.get(&id) else { return };
         let text = format!(
-            "Omni Guard AOCDS stopped a download.\n\nFile: {}\nFolder: {}\n\n{}\n\nThe file is isolated and cannot run.\n\nYES = Allow it (keep the file)\nNO = Remove it completely",
+            "Omni Guard AOCDS stopped a download.\n\nFile: {}\nFolder: {}\n\n{}\n\nThe file is isolated and cannot run.\n\nYES = Allow it (the file gets its normal name back)\nNO = Remove it completely",
             item.name,
             Path::new(&item.original_path).parent().map(|p| p.display().to_string()).unwrap_or_default(),
             item.note
@@ -470,4 +547,31 @@ fn prompt_async(st: Arc<AppState>, id: String) {
             let _ = resolve(&st, &id, allow, "popup"); // fails harmlessly if the dashboard answered first
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_things_that_can_run_are_held_first() {
+        assert!(hold_first(Path::new("setup.exe")));
+        assert!(hold_first(Path::new("run.PS1")));
+        assert!(hold_first(Path::new("linux-program")), "no extension");
+        assert!(!hold_first(Path::new("favicon.png")));
+        assert!(!hold_first(Path::new("report.pdf")));
+        assert!(!hold_first(Path::new("photos.zip")));
+    }
+
+    #[test]
+    fn our_own_old_note_files_are_never_downloads() {
+        assert!(!wanted(Path::new("favicon.png.soc-pending.txt.soc-pending.txt"), &[]));
+        assert!(wanted(Path::new("favicon.png"), &[]));
+        assert!(!wanted(Path::new("movie.crdownload"), &[]));
+    }
+
+    #[test]
+    fn wsl_list_is_cleaned() {
+        assert_eq!(parse_wsl_list("\u{feff}U\0b\0u\0n\0t\0u\0\r\n"), vec!["Ubuntu".to_string()]);
+    }
 }

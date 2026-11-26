@@ -8,6 +8,7 @@ import Icon from '../components/Icon.jsx'
 import { clock } from '../format.js'
 import { copyText } from '../export.js'
 import HiddenScripts from '../components/HiddenScripts.jsx'
+import { MetadataTable } from '../components/ContentReport.jsx'
 import SoftwarePanel from '../components/SoftwarePanel.jsx'
 
 const TONE = { clean: 'ok', suspicious: 'high', malicious: 'critical' }
@@ -361,6 +362,8 @@ function Detail({ r }) {
       </table>
 
       {r.hidden.length > 0 && <HiddenScripts hidden={r.hidden} />}
+      <MetadataTable metadata={r.metadata} />
+      {r.pe_ai && <div className="hint">AI structure score {r.pe_ai.probability.toFixed(2)} ({r.pe_ai.label}) · strongest signals: {r.pe_ai.reasons.join('; ')}</div>}
       {r.note && <div className="hint">{r.note}</div>}
     </div>
   )

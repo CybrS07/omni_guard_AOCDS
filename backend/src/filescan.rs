@@ -79,6 +79,12 @@ pub struct FileResult {
     pub vt: Option<Value>,
     /// Hashes (md5/sha1/sha256/sha384), known-bad match and digital signature, from the Python service.
     pub ident: Option<Value>,
+    /// exiftool-style fields (EXIF / XMP / PNG text / comments / document properties) and what was found hidden in them.
+    pub metadata: Option<Value>,
+    /// Answer of the PE structure model (HDF5 weights): probability + strongest signals.
+    pub pe_ai: Option<Value>,
+    /// what the YARA step found: rules checked, rules that matched the file, rules that matched hidden data
+    pub yara: Option<Value>,
     pub analysis: String, // "python" | "rust-only"
     pub note: String,
 }
@@ -770,9 +776,9 @@ fn trailing_check(f: &mut File, end: u64, total: u64, what: &str, kind: &str, fn
 }
 
 /// Run all the built-in checks on one file without opening it in any program.
-fn local_scan(path: &Path, total: u64) -> Result<Local, String> {
+fn local_scan(path: &Path, ext: &str, total: u64) -> Result<Local, String> {
     let mut f = File::open(path).map_err(|e| e.to_string())?;
-    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let ext = ext.to_string(); // the extension of the file's REAL name (a held file ends in .held, which says nothing)
     let (buf, partial) = read_samples(&mut f, total).map_err(|e| e.to_string())?;
     let kind = sniff(&buf[..buf.len().min(4096)], &ext).to_string();
     let (mut fnd, mut hid, mut zip) = (Vec::new(), Vec::new(), None);
@@ -895,18 +901,26 @@ fn sha256_of(path: &Path, size: u64) -> String {
 
 /// Check one file from start to finish and return its result with a verdict.
 pub(crate) fn scan_file(st: &Shared, path: &Path, allow_vt: bool, py_ok: &mut u8) -> FileResult {
-    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    scan_file_as(st, path, &name, allow_vt, py_ok)
+}
+
+/// Same, but the file is judged under `name`. The download guard reads a HELD file (<name>.held) and must still be judged by its real name,
+/// otherwise "disguised as a picture" and "script by extension" could not be seen.
+pub(crate) fn scan_file_as(st: &Shared, path: &Path, name: &str, allow_vt: bool, py_ok: &mut u8) -> FileResult {
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let name = name.to_string();
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
     let mut r = FileResult {
         at: crate::util::now_iso(),
         path: path.display().to_string(), name, size, sha256: String::new(), kind: "unknown".into(), verdict: "clean".into(),
-        score: 0, findings: vec![], hidden: vec![], zip: None, vt: None, ident: None, analysis: "rust-only".into(), note: String::new(),
+        score: 0, findings: vec![], hidden: vec![], zip: None, vt: None, ident: None, metadata: None, pe_ai: None, yara: None, analysis: "rust-only".into(), note: String::new(),
     };
     if size == 0 {
         return r;
     }
     r.sha256 = sha256_of(path, size);
-    match local_scan(path, size) {
+    match local_scan(path, &ext, size) {
         Ok(l) => {
             r.kind = l.kind;
             r.findings = l.findings;
@@ -939,6 +953,9 @@ pub(crate) fn scan_file(st: &Shared, path: &Path, allow_vt: bool, py_ok: &mut u8
                 }
                 r.vt = v.get("vt").filter(|x| !x.is_null()).cloned();
                 r.ident = v.get("ident").filter(|x| !x.is_null()).cloned();
+                r.metadata = v.get("metadata").filter(|x| !x.is_null()).cloned();
+                r.pe_ai = v.get("pe_ai").filter(|x| !x.is_null()).cloned();
+                r.yara = v.get("yara").filter(|x| !x.is_null()).cloned();
                 r.note = v["note"].as_str().unwrap_or("").to_string();
                 r.analysis = "python".into();
             }
@@ -1187,93 +1204,9 @@ pub fn browse(path: &str, with_files: bool) -> Result<Value, String> {
         "dirs": dirs.into_iter().map(|(n, p)| json!({ "name": n, "path": p.display().to_string() })).collect::<Vec<_>>(),
     }))
 }
-
-// ------------------------------------------------------------------ download monitor (runs all the time)
-
-const TEMP_EXT: &[&str] = &["crdownload", "part", "partial", "tmp", "download", "opdownload", "filepart", "!ut"];
-const MONITOR_KEEP: usize = 200;
-
-/// Background service: every NEW file that appears in the watched folders (Downloads + Desktop by default) - picture,
-/// document, video, archive, script, anything - is run through the same Rust + Python checks as the Scan page.
-pub fn spawn_monitor(st: Shared) {
-    std::thread::Builder::new()
-        .name("download-file-scan".into())
-        .spawn(move || monitor_loop(st))
-        .expect("spawn download file scanner");
-}
-
-/// Run forever in the background, scanning each new download once it has stopped growing.
-fn monitor_loop(st: Shared) {
-    use std::collections::{HashMap, HashSet};
-    let mut pending: HashMap<PathBuf, (u64, Option<std::time::SystemTime>, u8)> = HashMap::new();
-    let mut known: HashSet<PathBuf> = HashSet::new();
-    let mut first = true;
-    let mut py_fail = 0u8;
-    loop {
-        if !crate::settings::enabled("filescan") {
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            continue;
-        }
-        crate::settings::beat("filescan");
-        for dir in crate::downloads::watch_dirs(&st.cfg) {
-            let Ok(rd) = std::fs::read_dir(&dir) else { continue };
-            for e in rd.flatten() {
-                let path = e.path();
-                if known.contains(&path) || !e.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                    continue;
-                }
-                // our own "this file is being checked" note is not a download
-                if path.to_string_lossy().ends_with(".soc-pending.txt") {
-                    continue;
-                }
-                if first {
-                    known.insert(path); // files that were already there are not downloads
-                    continue;
-                }
-                let ext = path.extension().map(|x| x.to_string_lossy().to_lowercase()).unwrap_or_default();
-                if TEMP_EXT.contains(&ext.as_str()) {
-                    continue; // the browser is still writing it
-                }
-                let Ok(meta) = e.metadata() else { continue };
-                let sig = (meta.len(), meta.modified().ok());
-                let slot = pending.entry(path.clone()).or_insert((sig.0, sig.1, 0));
-                if (slot.0, slot.1) == sig && sig.0 > 0 {
-                    slot.2 += 1;
-                } else {
-                    *slot = (sig.0, sig.1, 0);
-                }
-                if slot.2 >= 2 && File::open(&path).is_ok() {
-                    pending.remove(&path);
-                    known.insert(path.clone());
-                    monitor_one(&st, &path, &mut py_fail);
-                }
-            }
-        }
-        known.retain(|p| p.exists());
-        pending.retain(|p, _| p.exists());
-        first = false;
-        std::thread::sleep(std::time::Duration::from_secs(2));
-    }
-}
-
-/// Scan one new download, log the result, alert if it is not clean, and keep it in the monitor list.
-fn monitor_one(st: &Shared, path: &Path, py_fail: &mut u8) {
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scan_file(st, path, false, py_fail)));
-    let Ok(mut r) = res else { return };
-    let (m, hidden) = (r.verdict == "malicious", r.hidden.len());
-    st.log(
-        "apps", if r.verdict == "clean" { "INFO" } else { "ALERT" },
-        format!("DOWNLOAD_FILE_SCAN {} verdict={} score={} findings={} hidden_items={hidden}", r.path, r.verdict, r.score, r.findings.len()),
-    );
-    if r.verdict != "clean" {
-        let top = r.findings.iter().map(|f| f.title.clone()).take(3).collect::<Vec<_>>().join("; ");
-        st.alert(
-            "filescan", if m { "high" } else { "medium" },
-            format!("Downloaded file looks {}: {}", r.verdict, r.name),
-            format!("{top}. Open the Scan page to see the hidden data."),
-            None, &format!("dlfile:{}", r.sha256), 300,
-        );
-    }
+/// Keeps the result of one downloaded file for the Scan page ("Recent downloads"), newest first. The download guard (downloads.rs)
+/// is the ONLY thing that watches the folders, so a file is never opened by two scanners at once.
+pub fn remember_download(st: &Shared, mut r: FileResult) {
     for h in r.hidden.iter_mut() {
         if h.text.chars().count() > PREVIEW {
             h.text = h.text.chars().take(PREVIEW).collect(); // char-safe cut
@@ -1281,7 +1214,8 @@ fn monitor_one(st: &Shared, path: &Path, py_fail: &mut u8) {
     }
     let mut v = st.filescan.monitor.lock().unwrap_or_else(|e| e.into_inner());
     v.insert(0, r);
-    v.truncate(MONITOR_KEEP);
+    v.truncate(200); // keep the 200 newest
 }
+
 
 // ------------------------------------------------------------------ tests

@@ -93,6 +93,14 @@ pub fn router(st: Shared) -> Router {
         .route("/api/registry/restore", post(registry_restore))
         .route("/api/registry/guard", post(registry_guard))
         .route("/api/registry/open", post(registry_open))
+        .route("/api/portwatch", get(portwatch_view))
+        .route("/api/portwatch/ack", post(portwatch_ack))
+        .route("/api/aiguard", get(aiguard_view))
+        .route("/api/aiguard/mode", post(aiguard_mode))
+        .route("/api/aiguard/scan-style", post(aiguard_scan_style))
+        .route("/api/aiguard/scan-now", post(aiguard_scan_now))
+        .route("/api/aiguard/allow", post(aiguard_allow))
+        .route("/api/aiguard/act", post(aiguard_act))
         .route("/api/schedules", get(schedules_view))
         .route("/api/schedules/refresh", post(schedules_refresh))
         .layer(middleware::from_fn(json_errors)) // inside the guard: turns plain-text rejections into JSON
@@ -584,7 +592,7 @@ async fn filescan_status(State(st): State<Shared>, Query(q): Query<StatusQ>) -> 
 /// Returns whether folder monitoring is turned on, which folders it watches and the items it found.
 async fn filescan_monitor(State(st): State<Shared>) -> Json<Value> {
     let watching: Vec<String> = crate::downloads::watch_dirs(&st.cfg).iter().map(|p| p.display().to_string()).collect();
-    Json(json!({ "enabled": crate::settings::enabled("filescan"), "watching": watching, "items": st.filescan.monitor_items() }))
+    Json(json!({ "enabled": crate::settings::enabled("downloads"), "watching": watching, "items": st.filescan.monitor_items() }))
 }
 
 #[derive(Deserialize)]
@@ -903,4 +911,90 @@ async fn schedules_view(State(st): State<Shared>) -> Json<Value> {
 async fn schedules_refresh(State(st): State<Shared>) -> Json<Value> {
     st.schedules.refresh.store(true, std::sync::atomic::Ordering::SeqCst);
     Json(json!({ "ok": true }))
+}
+
+
+// ---------------------------------------------------------------- Port watch (portwatch.rs)
+
+async fn portwatch_view() -> Json<Value> {
+    Json(crate::portwatch::view())
+}
+
+#[derive(Deserialize)]
+struct AckBody {
+    key: String,
+    ok: bool,
+}
+
+/// "Mark OK" (ok = true) keeps the connection under Warning; ok = false puts it back to Alert.
+async fn portwatch_ack(State(st): State<Shared>, h: HeaderMap, Json(b): Json<AckBody>) -> ApiResult {
+    let user = who(&h);
+    crate::portwatch::ack(&b.key, b.ok, &user).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    st.log("access", "WARN", format!("AUDIT user={user} action=PORTWATCH_{} key={}", if b.ok { "MARK_OK" } else { "UNMARK" }, b.key));
+    Ok(Json(crate::portwatch::view()))
+}
+
+// ---------------------------------------------------------------- AI Shield (aiguard.rs)
+
+/// Mode, scan style, last Net-Shield verdict, judged commands, pending suggestions and every automatic action.
+async fn aiguard_view() -> Json<Value> {
+    Json(crate::aiguard::view())
+}
+
+#[derive(Deserialize)]
+struct ModeBody {
+    mode: String,
+}
+
+/// off | suggest | auto
+async fn aiguard_mode(State(st): State<Shared>, h: HeaderMap, Json(b): Json<ModeBody>) -> ApiResult {
+    let m = crate::aiguard::set_mode(&b.mode).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    st.log("access", "WARN", format!("AUDIT user={} action=AI_RESPONSE_MODE mode={m}", who(&h)));
+    Ok(Json(crate::aiguard::view()))
+}
+
+#[derive(Deserialize)]
+struct ScanBody {
+    scan: String,
+}
+
+/// realtime | manual
+async fn aiguard_scan_style(State(st): State<Shared>, h: HeaderMap, Json(b): Json<ScanBody>) -> ApiResult {
+    let m = crate::aiguard::set_scan(&b.scan).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    st.log("access", "WARN", format!("AUDIT user={} action=AI_SCAN_STYLE scan={m}", who(&h)));
+    Ok(Json(crate::aiguard::view()))
+}
+
+/// The "Scan now" button: checks the connections and every running watched command once.
+async fn aiguard_scan_now(State(st): State<Shared>, h: HeaderMap) -> ApiResult {
+    st.log("access", "INFO", format!("AUDIT user={} action=AI_SCAN_NOW", who(&h)));
+    let s = st.clone();
+    Ok(Json(blocking(move || crate::aiguard::scan_once(&s)).await?))
+}
+
+#[derive(Deserialize)]
+struct AllowBody {
+    name: String,
+    #[serde(default = "yes")]
+    add: bool,
+}
+
+/// Add / remove a program name or an address that the AI may never kill or block.
+async fn aiguard_allow(State(st): State<Shared>, h: HeaderMap, Json(b): Json<AllowBody>) -> ApiResult {
+    crate::aiguard::allow_edit(b.add, &b.name);
+    st.log("access", "WARN", format!("AUDIT user={} action=AI_ALLOWLIST add={} name={}", who(&h), b.add, b.name));
+    Ok(Json(crate::aiguard::view()))
+}
+
+/// "Run now" for a suggested action, or a manual kill / block. The safety rails still apply.
+async fn aiguard_act(State(st): State<Shared>, h: HeaderMap, Json(b): Json<Value>) -> ApiResult {
+    need_admin(&st)?;
+    let user = who(&h);
+    st.log("access", "WARN", format!("AUDIT user={user} action=AI_RESPONSE_RUN {}", b));
+    let (s, v) = (st.clone(), b.clone());
+    let rec = blocking(move || crate::aiguard::handle(&s, &v, "dashboard", true, &user)).await?;
+    match rec {
+        Some(r) => Ok(Json(json!({ "result": r, "state": crate::aiguard::view() }))),
+        None => Err(fail(StatusCode::BAD_REQUEST, "unknown action")),
+    }
 }

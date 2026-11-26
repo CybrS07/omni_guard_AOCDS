@@ -6,7 +6,8 @@
 //! The id is checked (letters, digits and . _ + - only) before it is given to winget, and winget is run without a shell.
 //! Nothing here runs by itself: the person presses the button, and the name is written to the log.
 //!
-//! winget is part of Windows 10 / 11 ("App Installer"). Without it the list is empty and the screen says so.
+//! winget is part of Windows 10 / 11 ("App Installer"). If it is missing (a fresh or stripped Windows), it is installed
+//! first (from Microsoft's own download), and every step is written to `View.log` so the screen can show it live.
 
 use crate::state::AppState;
 use crate::util;
@@ -30,11 +31,92 @@ pub struct View {
     pub items: Vec<AppUpdate>,
     pub message: String,
     pub checked: String,
+    /// True while winget itself is being installed.
+    pub installing: bool,
+    /// Progress lines for the screen (newest last).
+    pub log: Vec<String>,
 }
 
 fn state() -> &'static Mutex<View> {
     static S: OnceLock<Mutex<View>> = OnceLock::new();
     S.get_or_init(|| Mutex::new(View { supported: cfg!(windows), ..View::default() }))
+}
+
+/// Add one progress line (shown on the screen) and keep only the last 30.
+fn note(line: &str) {
+    if let Ok(mut v) = state().lock() {
+        v.log.push(line.to_string());
+        let n = v.log.len();
+        if n > 30 {
+            v.log.drain(..n - 30);
+        }
+        v.message = line.to_string();
+    }
+}
+
+/// The program name to run: plain `winget`, or the App Installer's own path when PATH does not know it yet.
+fn winget_cmd() -> String {
+    if util::run("winget", &["--version"], 20).map(|o| o.ok).unwrap_or(false) {
+        return "winget".into();
+    }
+    let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+    let path = format!("{local}\\Microsoft\\WindowsApps\\winget.exe");
+    if !local.is_empty() && std::path::Path::new(&path).exists() && util::run(&path, &["--version"], 20).map(|o| o.ok).unwrap_or(false) {
+        return path;
+    }
+    String::new()
+}
+
+/// PowerShell that installs winget: first the App Installer bundle from Microsoft, then the WinGet module as a fallback.
+const INSTALL_WINGET: &str = r#"
+$ErrorActionPreference='Stop'
+$tmp=Join-Path $env:TEMP 'omniguard-winget'; New-Item -ItemType Directory -Force $tmp | Out-Null
+[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12
+try {
+  Write-Output 'Downloading App Installer (winget) from Microsoft ...'
+  Invoke-WebRequest -UseBasicParsing 'https://aka.ms/getwinget' -OutFile "$tmp\winget.msixbundle"
+  Write-Output 'Installing App Installer ...'
+  Add-AppxPackage -Path "$tmp\winget.msixbundle" -ForceApplicationShutdown
+} catch {
+  Write-Output "Direct install failed ($($_.Exception.Message)). Trying the WinGet module ..."
+  Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
+  Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery -Scope CurrentUser | Out-Null
+  Import-Module Microsoft.WinGet.Client
+  Repair-WinGetPackageManager -Force -Latest
+}
+Write-Output 'Done.'
+"#;
+
+/// Make sure winget exists. Installs it when missing and shows the steps. Returns the program to run, or an error text.
+fn ensure_winget() -> Result<String, String> {
+    let have = winget_cmd();
+    if !have.is_empty() {
+        return Ok(have);
+    }
+    if !cfg!(windows) {
+        return Err("Program updates need Windows.".into());
+    }
+    if let Ok(mut v) = state().lock() {
+        v.installing = true;
+    }
+    note("winget was not found. Installing winget (App Installer) ...");
+    let out = util::powershell(INSTALL_WINGET, &[], 900);
+    if let Some(o) = &out {
+        for l in o.stdout.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            note(l);   // show each step PowerShell printed
+        }
+    }
+    let now = winget_cmd();
+    if let Ok(mut v) = state().lock() {
+        v.installing = false;
+    }
+    if now.is_empty() {
+        note("winget could not be installed. Check the internet connection, or install App Installer from the Microsoft Store.");
+        Err("winget could not be installed.".into())
+    } else {
+        note("winget is installed.");
+        Ok(now)
+    }
 }
 
 pub fn view() -> View {
@@ -96,9 +178,14 @@ pub fn refresh(st: &Arc<AppState>) {
             return;
         }
         v.busy = true;
+        v.log.clear();
         v.message = "Checking for program updates ...".into();
     }
-    let result = util::run("winget", &["upgrade", "--accept-source-agreements", "--disable-interactivity"], 120);
+    // install winget first when it is missing, then ask it
+    let result = match ensure_winget() {
+        Ok(w) => util::run(&w, &["upgrade", "--accept-source-agreements", "--disable-interactivity"], 120),
+        Err(_) => None,
+    };
     let vulnerable: Vec<String> = st.software.list().iter().filter(|s| s.status == "vulnerable").map(|s| s.name.to_lowercase()).collect();
     let mut v = state().lock().unwrap();
     v.busy = false;
@@ -106,7 +193,11 @@ pub fn refresh(st: &Arc<AppState>) {
     match result {
         None => {
             v.items.clear();
-            v.message = "winget is not available on this PC (it comes with Windows 10 / 11 as App Installer).".into();
+            if cfg!(windows) {
+                v.message = "winget is not available and could not be installed. See the steps below.".into();
+            } else {
+                v.message = "Program updates need Windows.".into();
+            }
         }
         Some(o) => {
             let mut items = parse(&o.stdout);
@@ -130,13 +221,30 @@ pub fn update(st: &Arc<AppState>, id: &str, who: &str) -> Result<String, String>
         return Err("Program updates need Windows.".into());
     }
     st.log("apps", "WARN", format!("AUDIT user={who} action=APP_UPDATE id={id}"));
+    if let Ok(mut v) = state().lock() {
+        v.busy = true;
+        v.log.clear();
+    }
+    let winget = match ensure_winget() {   // installs winget first if it is missing
+        Ok(w) => w,
+        Err(e) => {
+            if let Ok(mut v) = state().lock() {
+                v.busy = false;
+            }
+            return Err(e);
+        }
+    };
+    note(&format!("Installing {id} ..."));
     let o = util::run(
-        "winget",
+        &winget,
         &["upgrade", "--id", id, "--exact", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"],
         900,
     );
     let ok = o.as_ref().map(|o| o.ok).unwrap_or(false);
     st.log("apps", if ok { "INFO" } else { "WARN" }, format!("APP_UPDATE {id} {}", if ok { "done" } else { "failed" }));
+    if let Ok(mut v) = state().lock() {
+        v.busy = false;   // let refresh run
+    }
     refresh(st);
     if ok { Ok(format!("{id} was updated.")) } else { Err(format!("{id} could not be updated. Close the program and try again, or update it by hand.")) }
 }

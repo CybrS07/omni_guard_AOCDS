@@ -11,7 +11,14 @@ dependencies = [
     "yara-python>=4.5.4",
     "gitpython>=3.2.1",
     "pypdf>=7.1.1",
+    "h5py>=3.10",          # the PE malware model keeps its weights in an HDF5 file (models/pe_malware.h5)
+    "pefile>=2023.2.7",    # reads a program's structure for that model (nothing is ever run)
+    "onnxruntime>=1.18",   # runs the deep-learning models (Sentinel, Net-Shield); without it they switch off
 ]
+
+[project.optional-dependencies]
+# only needed to RETRAIN the models (npm run train): the installed app does not need them
+train = ["torch>=2.2", "scikit-learn>=1.4", "xgboost>=2.0", "skl2onnx>=1.17", "onnxmltools>=1.12", "onnx>=1.16"]
 
 [tool.uv]
 package = false

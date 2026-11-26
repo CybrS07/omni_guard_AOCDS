@@ -5,7 +5,6 @@ import Button from '../components/Button.jsx'
 import { Confirm, useToast } from '../components/Feedback.jsx'
 import Icon from '../components/Icon.jsx'
 import { Bars } from '../components/Loader.jsx'
-import TrafficWatch from '../components/TrafficWatch.jsx'
 import { timeAgo } from '../format.js'
 
 const PAGE = 30
@@ -184,8 +183,6 @@ export default function Firewall({ status }) {
             </div>
             {!loggingOn && <div className="hint">Port-scan detection reads Windows' dropped-packet log. Turn it on to catch scans and repeated probes of sensitive ports.</div>}
           </div>
-
-          <TrafficWatch onBlocked={reload} />
 
           {/* ---- rules table ---- */}
           <div className="panel">

@@ -17,6 +17,8 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 import aimodel
+import sentinel
+import store
 import yara_engine
 
 router = APIRouter(prefix="/api/registry", tags=["registry"])
@@ -41,6 +43,12 @@ class Item(BaseModel):
     key: str
     value: str = ""
     data: str = Field(default="", max_length=6000)
+    # optional facts about who wrote it (the agent knows these); they help the Sentinel models
+    unsigned_writer: bool = False
+    file_missing: bool = False
+    no_owner: bool = False
+    burst: int = 0
+    new_entry: bool = False
 
 
 class JudgeIn(BaseModel):
@@ -104,9 +112,21 @@ def judge_one(item: Item) -> dict:
         reasons.append(f"The AI model reads it as a {ai['label']} script ({round(ai['confidence'] * 100)}% sure)")
         score += 35
 
+    # 6) Sentinel: Random Forest + XGBoost on 48 behaviour features (offline, ONNX)
+    sent = sentinel.predict(item.model_dump())
+    if sent and sent["prob"] >= 0.5:
+        reasons.append(f"Sentinel (Random Forest + XGBoost) rates this entry {round(sent['prob'] * 100)}% likely malicious"
+                       + (": " + "; ".join(sent["reasons"][:3]) if sent["reasons"] else ""))
+        score += 45 if sent["prob"] >= 0.85 else 25
+
     score = min(score, 100)
     verdict = "malicious" if score >= 80 else "suspicious" if score >= 40 else "ok"
-    return {"key": item.key, "value": item.value, "verdict": verdict, "score": score, "reasons": reasons}
+    if verdict != "ok":
+        try:
+            store.add_finding("registry", "high" if verdict == "malicious" else "medium", item.key, verdict, score, {"reasons": reasons, "scale": "0-100", "sentinel": sent})
+        except Exception:
+            pass   # the database must never stop a verdict
+    return {"key": item.key, "value": item.value, "verdict": verdict, "score": score, "reasons": reasons, "sentinel": sent}
 
 
 @router.post("/judge")

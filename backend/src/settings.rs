@@ -18,12 +18,13 @@ pub struct Def {
 }
 
 pub const DEFS: &[Def] = &[
-    Def { name: "downloads", label: "Download guard", about: "Holds new programs/installers (exe, msi, ps1, zip...) in isolation, asks VirusTotal + NVD, and asks you before anything risky runs." },
-    Def { name: "filescan", label: "Downloaded-file scanner", about: "Checks every new picture, document, video or archive in the watched folders for hidden scripts, hidden pixel data and zip bombs." },
+    Def { name: "downloads", label: "Download guard", about: "Checks every new download with YARA, hidden-data and AI checks, then VirusTotal + NVD. Programs are held in isolation first; anything risky stays held until you Allow or Remove it." },
     Def { name: "netwatch", label: "Traffic watch", about: "Learns which addresses your PC normally talks to and marks any address that suddenly sends/receives far more as danger." },
     Def { name: "integrity", label: "File integrity guard", about: "Re-checks the files and folders you protect and alerts when one is changed, added or deleted." },
     Def { name: "registry", label: "Registry guard", about: "Reads the startup, service and installed-software parts of the Windows registry, checks that every entry belongs to real software or an official source, and takes a restore point every few minutes." },
     Def { name: "schedules", label: "Schedule watch", about: "Every 10 minutes lists the Windows scheduled tasks, finds the ones that start by themselves at boot or sign-in, and flags the ones that belong to no installed software." },
+    Def { name: "portwatch", label: "Port watch", about: "Every 5 seconds lists programs that keep a connection to the internet open while this PC is uploading, or reconnect like a heartbeat. It logs and alerts; Mark OK keeps a known program under Warning." },
+    Def { name: "aiguard", label: "AI Shield", about: "Net-Shield (graph neural network) reads your connections for worm and scanner patterns and the Command AI judges new terminal commands. Realtime or manual scanning and the response mode are set on the AI Shield page." },
     Def { name: "software", label: "Installed-software check", about: "Every 30 minutes checks installed programs against the NVD for known vulnerabilities and patches." },
 ];
 
@@ -61,7 +62,6 @@ pub fn init(cfg: &Config) {
     let saved: Saved = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     let default_on = |n: &str| match n {
         "downloads" => cfg.download_monitor,
-        "filescan" => cfg.download_monitor && cfg.scan_download_files,
         "software" => cfg.software_check,
         _ => true,
     };

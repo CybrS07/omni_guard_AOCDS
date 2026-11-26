@@ -22,9 +22,11 @@ import accounts
 from domaincheck import router as domain_router
 from filescan import router as filescan_router
 from gitsync import router as sync_router, start_background as start_sync
+from ai_api import router as ai_router
 from intel import router as intel_router
 from modeltrain import router as model_router
 from reganalyze import router as reg_router
+from store import router as store_router
 from yara_engine import router as yara_router
 
 app = FastAPI(title="Omni Guard AOCDS Scan API", docs_url=None, redoc_url=None, openapi_url=None)
@@ -76,6 +78,8 @@ app.include_router(reg_router)       # judge odd registry values (rules + YARA +
 app.include_router(model_router)     # train the classifier locally + hot-swap
 app.include_router(sync_router)      # Git sync of rules + model weights
 app.include_router(intel_router)     # VirusTotal + NVD lookups for the downloads watcher
+app.include_router(ai_router)        # deep-learning modules: Sentinel (RF + XGBoost), Net-Shield (GNN), Command AI
+app.include_router(store_router)     # local SQLite database: findings and automatic actions
 
 
 @app.on_event("startup")

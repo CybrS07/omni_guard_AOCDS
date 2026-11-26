@@ -18,6 +18,28 @@ def main() -> int:
         if not ok:
             print("A YARA rule file is broken: " + "; ".join(errors))
             return 1
+        import ai_common
+        import netshield
+        import sentinel
+
+        if ai_common.available():
+            # every shipped model must load and answer once; a missing / broken file fails the BUILD, not the installed app
+            import numpy as np
+
+            problems = []
+            for f in ai_common.KNOWN_ONNX:
+                try:
+                    ai_common.check_onnx_generic(ai_common.BUNDLED_DIR / f)
+                except Exception as e:
+                    problems.append(f"{f}: {e}")
+            if problems:
+                print("A deep-learning model is missing or broken: " + "; ".join(problems))
+                return 1
+            netshield.analyze([], [])
+            assert sentinel.predict({"key": "HKCU\\Run\\x", "data": "notepad.exe"}) is not None
+            print("deep-learning models loaded: sentinel (RF + XGBoost), netshield (GNN)")
+        else:
+            print("onnxruntime is not installed: the deep-learning modules are off, the rules still work")
         print(f"scan service self-test passed ({count} YARA rules)")
         return 0
     except Exception:

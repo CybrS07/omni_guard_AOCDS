@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../api.js'
 import Button from '../Button.jsx'
 import { useToast } from '../Feedback.jsx'
@@ -16,6 +16,15 @@ export default function AppUpdates() {
 
   const load = useCallback(() => api('/apps/updates').then(setView).catch(() => setView(null)), [])
   useEffect(() => { load() }, [load])
+
+  // while a check or an install runs, read the progress (winget install steps) every second
+  const working = checking || !!busyId
+  const timer = useRef(null)
+  useEffect(() => {
+    if (!working) return undefined
+    timer.current = setInterval(() => { api('/apps/updates').then((v) => setView((old) => ({ ...(old || {}), ...v }))).catch(() => {}) }, 1000)
+    return () => clearInterval(timer.current)
+  }, [working])
 
   // ask winget again (a few seconds)
   const refresh = async () => {
@@ -56,6 +65,9 @@ export default function AppUpdates() {
       </p>
       {view && view.supported === false && <p className="hint">Program updates work on Windows only.</p>}
       {view?.message && <p className="hint">{view.message}{view.checked ? ` Last check: ${view.checked.replace('T', ' ').slice(0, 19)}.` : ''}</p>}
+      {(working || view?.installing) && view?.log?.length > 0 && (
+        <pre className="mono hint" style={{ margin: '0 0 10px', whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{view.log.join('\n')}</pre>
+      )}
       {items.length > 0 && (
         <div className="table-wrap">
           <table>

@@ -48,6 +48,23 @@ def check_rules() -> None:
     print(f"[build] {count} YARA rules compile")
 
 
+def check_models() -> None:
+    """Step 2b: stop the build if a trained model is missing or does not load, so an installer can never ship without its AI."""
+    import ai_common
+    import pemodel
+    st = pemodel.status(ai_common.BUNDLED_DIR)
+    if not st["h5py"]:
+        sys.exit("[build] h5py is not installed (uv sync): the PE model weights (.h5) could not be read")
+    if not st["loaded"]:
+        sys.exit(f"[build] models/{pemodel.MODEL_FILE} is missing or broken ({st['error'] or 'not found'}). Run: python build_dataset.py --zoo ... && python train_pe.py")
+    missing = [f for f in ("sentinel_rf.onnx", "sentinel_xgb.onnx", "netshield_gnn_int8.onnx") if not (ai_common.BUNDLED_DIR / f).exists()]
+    if missing:
+        sys.exit("[build] models missing: " + ", ".join(missing))
+    r = st["report"]
+    print(f"[build] PE model (HDF5, {st['size_kb']} KB): test accuracy {round(r['test']['accuracy'] * 100)}%, train/test gap {round(r['train_test_gap'] * 100)} points, {r['fit_check']}")
+    print("[build] deep-learning models present: sentinel, netshield")
+
+
 def prepare_git() -> Path | None:
     """Step 3 (Windows only): make sure vendor/mingit exists. Returns its folder, or None on other systems."""
     if sys.platform != "win32":
@@ -95,6 +112,19 @@ def freeze(git_folder: Path | None) -> None:
         "--hidden-import", "reganalyze",
         "--hidden-import", "fileid",
         "--hidden-import", "modeltrain",
+        "--hidden-import", "ai_api",
+        "--hidden-import", "ai_common",
+        "--hidden-import", "netshield",
+        "--hidden-import", "sentinel",
+        "--hidden-import", "store",
+        "--hidden-import", "pemodel",
+        "--hidden-import", "pefeatures",
+        "--hidden-import", "stegometa",
+        "--hidden-import", "cmdguard",
+        "--hidden-import", "pefile",
+        "--collect-all", "h5py",
+        "--exclude-module", "pkg_resources",   # not used; its PyInstaller hook breaks when setuptools is vendored
+        "--collect-all", "onnxruntime",
         "--hidden-import", "train_ai",
         "--add-data", f"{HERE / 'models'}{sep}models",
         "--add-data", f"{HERE / 'rules'}{sep}rules",
@@ -116,5 +146,6 @@ def self_test() -> None:
 if __name__ == "__main__":
     train_model()
     check_rules()
+    check_models()
     self_test()
     freeze(prepare_git())

