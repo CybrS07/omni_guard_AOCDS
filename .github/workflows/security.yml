@@ -24,7 +24,7 @@ jobs:
         run: |
           cargo install cargo-audit --locked
           cargo audit --file backend/Cargo.lock
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
       - name: pip-audit (scan service)
         run: |
           uv sync --project backend/scan
