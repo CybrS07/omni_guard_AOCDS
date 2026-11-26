@@ -19,7 +19,7 @@ Four programs make up the app. Each one only talks to its neighbours over `127.0
    ┌───────────────────────────────┐       ┌─────────────────────────────────────┐
    │ RUST AGENT  127.0.0.1:<agent port>    │       │ PYTHON SERVICE  127.0.0.1:<scan port>      │
    │ backend/src/*.rs              │──────▶│ backend/scan/*.py  (FastAPI)        │
-   │ system data, firewall, files, │ HTTP  │ face login, accounts, VirusTotal,   │
+   │ system data, firewall, files, │ HTTP  │ accounts, YARA, VirusTotal,   │
    │ monitors, alerts, logs        │ (intel│ NVD, domain check, hidden-data      │
    │                               │ _client)│ decoding, int8 script classifier  │
    └──────────────┬────────────────┘       └──────────────────┬──────────────────┘
@@ -28,7 +28,7 @@ Four programs make up the app. Each one only talks to its neighbours over `127.0
            Windows (firewall, event log, registry)      the internet (only hashes, names, domains)
 ```
 
-Rule of thumb used everywhere: **Rust does everything that touches Windows or the disk and runs all the time; Python does the things that need a face model, the web, or text/pixel analysis; React only shows and controls.** The dashboard never talks to the internet by itself, and Python never touches the firewall.
+Rule of thumb used everywhere: **Rust does everything that touches Windows or the disk and runs all the time; Python does the things that need the web, YARA, or text/pixel analysis; React only shows and controls.** The dashboard never talks to the internet by itself, and Python never touches the firewall.
 
 
 ## 0. Folder map
@@ -37,7 +37,7 @@ Rule of thumb used everywhere: **Rust does everything that touches Windows or th
 omni-guard-aocds/
 ├── README.md                  how to run, build, features
 ├── ARCHITECTURE.md            this file
-├── .env.example               copy to .env: VT_API_KEY, NVD_API_KEY, FACE_MATCH_PERCENT, FACE_REQUIRED
+├── .env.example               copy to .env: VT_API_KEY, NVD_API_KEY, GIT_TOKEN
 ├── package.json               root scripts: setup, dev, ui, agent, scan, build, desktop:*
 ├── backend/
 │   ├── Cargo.toml, config.json
@@ -64,7 +64,7 @@ omni-guard-aocds/
 | Packaged proxy | Electron does the same job with a tiny local server. Only its own window may use it: every request needs the per-launch header `X-App-Key`. | `desktop/main.cjs` (adds the key, starts the processes), `desktop/server.cjs` (the proxy) |
 | Agent | Every route except `/api/health` needs `X-SOC-Token`, checked in constant time. | `backend/src/api.rs` |
 | Agent to Python | The agent calls Python itself for lookups, with a small hand-written HTTP client. | `backend/src/intel_client.rs` |
-| Python login | The sign-in session is a separate token (`X-Token`) issued by Python, sent by `scanApi.js`. | `backend/scan/scan.py`, `server.py` |
+| Python login | The sign-in session is a separate token (`X-Token`) issued by Python, sent by `scanApi.js`. | `backend/scan/accounts.py`, `server.py` |
 
 Ports: agent **<agent port>**, scan service **<scan port>** (`SOC_SCAN_PORT`), dev UI **5173**. All bound to localhost only.
 
@@ -113,9 +113,8 @@ Data on disk (`data_dir`, default `C:\ProgramData\SocMonitor`): `logs/*.txt`, `a
 
 | File | Job | Talks to |
 |---|---|---|
-| `server.py` | FastAPI app on `:<scan port>`. Routes: `/health`, `/status`, `/detect`, `/enroll`, `/login`, `/users*`, `/face/threshold`, `/face/required`, `/logs`; includes the three routers below. CORS limited to the dashboard origin. | `scan.py`, routers |
-| `face_model.py` | Loads the two ONNX face models (detect + recognise) and makes face embeddings; downloads weights once. | `scan.py` |
-| `scan.py` | Accounts and sign-in: password hashing (scrypt), face matching against the percentage level, lockout after failures, sessions, add/remove users, change password, the `scan.txt` log in the agent's log format. Reads `FACE_MATCH_PERCENT` / `FACE_REQUIRED` from `.env` through `intel.py`. | `face_model.py`, `intel.py` (for `.env`) |
+| `server.py` | FastAPI app on the hidden scan port. Routes: `/health`, `/status`, `/enroll`, `/login`, `/users*`, `/logs`; includes the routers of the other modules. CORS limited to the dev dashboard. An empty 404 for any caller without the secret header. | `accounts.py`, routers |
+| `accounts.py` | Accounts and sign-in: password hashing (scrypt), lockout after failures, sessions, add/remove users, change password, the `scan.txt` log in the agent's log folder. | `server.py` |
 | `intel.py` | `.env` handling (keys are read and written here), VirusTotal hash lookup, NVD lookup (`cpeName`), the verdict logic, endpoints `/intel/analyze` (used by the agent for downloads), `/intel/software`, `/intel/hash`, `/intel/status`, `/intel/config`. NVD text is returned exactly as published. | the internet; called by `downloads.rs`, `software.rs`, `CheckServices.jsx`, `KeysForm.jsx` |
 | `filescan.py` | `/filescan/analyze`: takes the Rust findings and adds the parts Python is good at: decodes data hidden in image pixels (LSB), reads script text (and base64 inside it), peeks into zip/Office/jar files with limits, reads PDF JavaScript, VirusTotal hash lookup, and the AI second opinion. Returns merged findings plus the hidden data to show. | `aimodel.py`, `intel.py`; called by `filescan.rs` |
 | `aimodel.py` | The local classifier: hashed character n-grams to a small dense network, weights stored as int8 in `models/script_clf_int8.npz`, plain numpy. Labels: benign, downloader, obfuscated, backdoor, persistence, evasion. | `filescan.py` |
@@ -144,8 +143,7 @@ Data on disk (`data_dir`, default `C:\ProgramData\SocMonitor`): `logs/*.txt`, `a
 ### Sign-in (talks to Python)
 | File | Job |
 |---|---|
-| `scan/ScanGate.jsx` | Blocks the app until signed in: first-run admin setup (`/enroll`), password login (`/login`), optional face step; remembers the session in `sessionStorage`; exposes `useScan()` (user, role, token). |
-| `scan/FaceCam.jsx` | Webcam, `/detect` overlay, `grab()` frames. Used by `ScanGate.jsx`. |
+| `scan/ScanGate.jsx` | Blocks the app until signed in: first-run administrator setup (`/enroll`) or password login (`/login`); remembers the session in `sessionStorage`; exposes `useScan()` (user, role, token). | `scan/scanApi.js` |
 
 ### Pages (each page = one route)
 | Page | Calls |
@@ -154,7 +152,7 @@ Data on disk (`data_dir`, default `C:\ProgramData\SocMonitor`): `logs/*.txt`, `a
 | `Firewall.jsx` | agent: `/firewall*`, `/firewall/port/*`, `/firewall/clear`, `/dns/resolve`, `/metrics`, `/alerts`. Uses `BlockIp`, `TrafficWatch`. |
 | `Downloads.jsx` | agent: `/downloads`, `/downloads/decision` (Allow / Remove). Uses `CheckServices`. |
 | `Scan.jsx` | agent: `/filescan/browse|start|status|cancel|monitor`, `/software/rescan`. Uses `FolderPicker`, `SoftwarePanel`, `ExportBar`. |
-| `Logs.jsx` | agent: `/logs?kind=...` for every txt log, including the face-scan log (`scan.txt`, written by Python into the agent's log folder, so the agent serves it). Uses `EventsPanel` for Windows events. |
+including the scan-service log (`scan.txt`
 | `System.jsx` | agent: `/system`, `/snapshot`, `/index`. |
 | `Settings.jsx` | Checklist (agent `/settings`, `/integrity`, `/downloads`; Python `/intel/status`, `/health`) and hosts the settings components below. |
 
@@ -196,7 +194,7 @@ Data on disk (`data_dir`, default `C:\ProgramData\SocMonitor`): `logs/*.txt`, `a
 
 **C. Scan this PC.** `Scan.jsx` starts the folder scan on the user folders and triggers `/software/rescan`. `software.rs` lists installed programs and, one by one, calls Python `/intel/software`, which queries the NVD and returns CVEs and the fixed version. `SoftwarePanel.jsx` shows the table.
 
-**D. Signing in.** `ScanGate.jsx` asks Python `/status`. Password only: `/login` with no images. With the face option: `FaceCam.jsx` captures frames, `/login` sends them, `scan.py` compares them to the saved profile at the chosen percentage (`FaceLevel.jsx` sets it).
+**D. Signing in.** `ScanGate.jsx` asks Python `/status`. No account yet: `/enroll` creates the administrator. Otherwise `/login` checks the password in `accounts.py` and returns a session token that the dashboard sends as `X-Token`.
 
 **E. Traffic watch.** `collector.rs` reads the connection list every 3 s, passes it to `netwatch.rs`, which updates per-IP history and raises alerts. `TrafficWatch.jsx` polls `/netwatch`.
 
@@ -212,7 +210,7 @@ Data on disk (`data_dir`, default `C:\ProgramData\SocMonitor`): `logs/*.txt`, `a
 
 1. **Start.** Development: `npm run dev` starts Vite on 5173; its plugin starts `cargo run` (agent, <agent port>) and `uvicorn` (scan, <scan port>). Installed app: Electron `main.cjs` starts `soc-agent.exe` and `soc-scan.exe`, then opens the window on its local server (`server.cjs`).
 2. **Agent boot** (`main.rs` to `cli.rs` to `agent.rs`): load `config.json`, read or create `api-token.txt`, build `AppState`, load `settings.json`, then spawn one thread per job (collector, system, watchers, firewall log, downloads, file monitor, traffic watch, integrity, software) and start the API.
-3. **Python boot** (`server.py`): load the face models and the int8 classifier, read `.env`, open `users.json`.
+3. **Python boot** (`server.py`): load the YARA rules and the int8 classifier
 4. **Open the app.** `main.jsx` mounts `ThemeProvider`, then `ScanGate` (asks Python `/status`: first run creates the admin, otherwise shows the sign-in), then the router and `App.jsx`, which shows the load screen until the agent answers `/api/status`.
 5. **Run.** Pages poll the agent with `usePoll`; sign-in, key storage and lookups go to Python. Monitors in the agent raise alerts (`st.alert`) that land in `alerts.txt` and on the Dashboard; the download guard may also pop a Windows message box.
 6. **Change something.** Settings posts to the agent (`/settings/*`, `/services/set`, `/integrity/*`) or Python (`/users/*`, `/face/*`, `/intel/config`). The agent saves `settings.json`; monitors read the new values on their next loop; Python writes `.env` and users.

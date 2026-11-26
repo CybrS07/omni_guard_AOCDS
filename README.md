@@ -11,6 +11,8 @@ Two layers, one direction of data:
 
 | Read this | To learn |
 |---|---|
+| `docs/PRINCIPLE.md` | **Purpose, principle and working of the app**, and its limits |
+| `LICENSE` | Free to use and modify; credit required; no warranty or liability (also for modified copies) |
 | `ARCHITECTURE.md` | The whole picture: folder map, who talks to whom, start-up workflow, walk-throughs of each feature |
 | `docs/FILE-INTERACTIONS.md` | Generated table of which `.rs`, `.py`, `.js`, `.jsx` file uses which, and every API route with the screen that calls it |
 | `backend/README.md` | The two back-end programs (Rust agent and Python service) and how they cooperate |
@@ -80,19 +82,19 @@ loader are look-alikes. Paste the real CSS into `frontend/src/components/uiverse
 
 ```
 npm run setup          # once: npm packages + Python env (uv)
-npm run dev            # starts Rust agent + Python face-scan + the web page
+npm run dev            # prepares everything it needs, then starts Rust agent + Python scan service + the web page
 npm run ui             # page only (agent/scan already running)
 ```
 
 | Part | Where | Language |
 |---|---|---|
 | Agent, firewall, Windows events (`events.rs`), port stop/start (`ports.rs`) | `backend/src` | Rust |
-| Face scan (login at app start, writes `scan.txt`) | `backend/scan` | Python (uv) |
+| Scan service (sign-in, YARA, AI model, Git sync; writes `scan.txt`) | `backend/scan` | Python (uv) |
 | Dashboard, theme (`frontend/src/theme`) | `frontend` | React |
 | PC app wrapper | `desktop` | Electron |
 
 PC app: `npm run desktop:setup` once, then `npm run desktop:build` (Windows) - installer appears in `dist-desktop/`.
-Set `VITE_SCAN_GATE=off` in `frontend/.env.local` to skip the face-scan screen.
+Set `VITE_SCAN_GATE=off` in `frontend/.env.local` to skip the sign-in screen.
 
 Firewall > New rule > *Block by domain*: type a site (or paste a link), press Find IPs, then Block now.
 It resolves the domain in Rust (`backend/src/dns.rs`) and makes an outbound block rule for all its addresses.
@@ -159,15 +161,14 @@ JPEG pixels are compressed, so for JPEG the structure checks (data after the ima
 - **Scan page**: pick a folder, or press a drive chip (`C:\`, `D:\` ...) to scan the whole drive. Choose what to check (Pictures, Documents, Video & audio, Archives, Scripts, Programs, or your own extensions) and which folders to skip. Choices are remembered.
 - **Download monitor** (`filescan::spawn_monitor` in `backend/src/filescan.rs`, Rust service thread): every NEW file of any type that lands in the watched folders is checked for zip bombs, data hidden after images/videos, hidden pixel data, scripts and disguised programs. The Python part (`backend/scan/filescan.py`) decodes what is hidden and the Scan page shows it. Switch off with `"scan_download_files": false` in `config.json`.
 - **Downloads page > Check services**: look up a SHA-256 (or hash a file in the browser) on VirusTotal, or an application name + version on the NVD, any time. "No record found" is shown when the NVD has nothing.
-- **Settings page**: agent info, watched folders, face-match level, API keys, theme.
-- **Face scan** needs a 95% match (change with `FACE_MATCH_PERCENT` in `.env`).
+- **Settings page**: agent info, watched folders, accounts, updates (Git sync), AI model, API keys, theme.
 - **Secrets** live only in `.env` (git-ignored). Installed app: `C:\ProgramData\SocMonitor\.env` (kept across updates).
 
 ## CI/CD: every push becomes an app update
 
 `.github/workflows/ci.yml` tests every branch/PR. `.github/workflows/release.yml` runs on every push to `main`:
 tests -> builds dashboard, Rust agent, Python scan service -> builds the Windows installer -> publishes a GitHub Release.
-Installed copies check GitHub Releases on start and every 4 hours (`electron-updater` in `desktop/main.cjs`), download the new version and ask to restart.
+Installed copies check GitHub Releases by themselves every 48 hours and on Help -> "Check for updates now" (`electron-updater` in `desktop/main.cjs`); nothing is downloaded or installed until you press "Update now".
 
 One-time setup:
 1. Create a GitHub repository and push this folder to `main` (`.env` is ignored, so no keys are uploaded).
@@ -179,15 +180,17 @@ The repository must be public for the updater to read releases without a token (
 
 ## New in this version
 
-- **Sign-in**: password first; the face scan is the second option (Settings > Sign-in: face scan to require it, set the match level 80-100% with the slider).
+- **Sign-in**: username and password (the first account becomes the administrator).
 - **Settings** (one page): setup checklist, services (stop/start each background service and choose which start with the app), watched folders (add/remove), file integrity guard (`backend/src/integrity.rs`), accounts (add, change password, remove), face level, API keys, theme.
 - **Traffic watch** (Firewall page, `backend/src/netwatch.rs`): every address the PC talks to, in and out. Each address is compared with its own usual rate; a sudden jump, a backdoor port or several signs together are marked **watch** / **danger** and raise an alert.
 - **Scan > Scan this PC**: installed programs checked against the NVD (vulnerabilities and available patches) plus a sweep of user folders for hidden scripts / known malware.
 - **Downloads > Check services**: file hash on VirusTotal, application name + version on the NVD, and a link/domain check (age, registrar, TLS certificate, subdomains from the certificate).
-- **Local AI** (`backend/scan/aimodel.py`, `train_ai.py`): a tiny neural network classifies scripts (benign, downloader, obfuscated, backdoor, persistence, evasion). Weights are stored as int8 (`models/script_clf_int8.npz`, about 0.3 MB), run with plain numpy, nothing leaves the PC. It was trained on generated sample scripts, so treat it as a second opinion next to the rules; retrain with your own samples using `train_ai.py`.
+- **Local AI** (`backend/scan/aimodel.py`, `train_ai.py`): a tiny neural network classifies scripts (benign, downloader, obfuscated, backdoor, persistence, evasion). Weights are stored as int8 (`models/script_clf_int8.npz`, about 0.3 MB), run with plain numpy, nothing leaves the PC. It was trained on generated sample scripts, so treat it as a second opinion next to the rules; retrain from Settings -> Script AI model (on this PC, applied at once) or with `npm run train`; `npm run build:scan` retrains it automatically as a build prerequisite.
 - See `ARCHITECTURE.md` for how every .rs, .py, .js and .jsx file connects.
 - **Firewall > Clear app rules** removes every rule this app created.
 - NVD notice: "This product uses the NVD API but is not endorsed or certified by the NVD." NVD text is shown exactly as published.
+
+**Single file:** `npm run build:exe` builds everything into one portable file, `dist-desktop/OmniGuard-AOCDS-<version>-portable.exe`. Copy it to any Windows PC and double-click it (administrator prompt once). It runs on any 64-bit Windows 10 / 11 PC with nothing installed first (the C runtime, Python, YARA, git and the AI model are inside). It does not run on macOS or Linux: the registry, firewall and audit features are Windows-only. Build on Windows with Node 22, Rust, uv and internet.
 
 ## Making the Windows app (exe) and keeping it tied to Git
 
@@ -204,7 +207,7 @@ The installer appears in `dist-desktop/` (`Omni Guard AOCDS Setup x.y.z.exe`). R
 Keep it tied to Git (no more manual rebuilds):
 1. `git init`, commit, create a GitHub repository, `git remote add origin <url>`, `git push -u origin main`.
 2. GitHub > Settings > Actions > General > Workflow permissions: **Read and write**.
-3. From now on every `git push` to `main` runs `.github/workflows/release.yml`, which builds the installer and publishes a Release. Installed apps check Releases at start and every 4 hours and update themselves.
+3. From now on every `git push` to `main` runs `.github/workflows/release.yml`, which builds the installer and publishes a Release. Installed apps check Releases every 48 hours (or on Help -> Check for updates now) and install only when you press Update now.
 
 Your keys stay out of git (`.env` is ignored); in the installed app they live in `C:\ProgramData\SocMonitor\.env`.
 
@@ -213,3 +216,9 @@ Your keys stay out of git (`.env` is ignored); in the installed app they live in
 Colours exist only in `frontend/src/theme/theme.css`.
 Dark = Midnight Violet `#1C0221` + Brick Ember `#B80C09` + White `#FFFFFF`.
 Light = Coral Glow `#FF7F51` + Imperial Blue `#01295F` + Wine Plum `#702632`.
+
+
+## License
+Free to use and modify, but you must keep the credit to the original authors and say what you changed. There is no warranty,
+and the authors are not responsible for damage, for half-applied updates, or for any backdoor in a modified or third-party copy.
+Read `LICENSE`. (This is a project license, not legal advice; ask a lawyer if you need certainty.)

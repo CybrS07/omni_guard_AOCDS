@@ -332,7 +332,20 @@ function Detail({ r }) {
         {r.sha256 && <Button size="sm" icon="fileText" onClick={() => copy(r.sha256, 'SHA-256')}>Copy SHA-256</Button>}
         {r.vt?.known && <a className="hint" href={r.vt.link} target="_blank" rel="noreferrer">VirusTotal: {r.vt.malicious} malicious engines - open report</a>}
       </div>
-      <div className="hint mono" style={{ wordBreak: 'break-all' }}>SHA-256 {r.sha256 || 'not calculated'} · analysis by {r.analysis}</div>
+      {r.ident ? (
+        <div style={{ display: 'grid', gap: 4 }}>
+          <div className="hint">{r.ident.verdict_hint} · analysis by {r.analysis}</div>
+          <dl className="kv" style={{ margin: 0 }}>
+            {['md5', 'sha256'].map((n) => r.ident.hashes?.[n] && (
+              <Fragment key={n}><dt>{n === 'md5' ? 'MD5' : 'SHA-256'}</dt><dd style={{ wordBreak: 'break-all', textAlign: 'left' }}>{r.ident.hashes[n]}</dd></Fragment>
+            ))}
+            <dt>Digital signature</dt>
+            <dd style={{ textAlign: 'left' }}>{r.ident.signature?.checked ? `${r.ident.signature.status}${r.ident.signature.signer ? ' · ' + r.ident.signature.signer : ''}` : 'not checked (only programs on Windows)'}</dd>
+          </dl>
+        </div>
+      ) : (
+        <div className="hint mono" style={{ wordBreak: 'break-all' }}>SHA-256 {r.sha256 || 'not calculated'} · analysis by {r.analysis}</div>
+      )}
 
       <table>
         <thead><tr><th>Severity</th><th>What was found</th><th>Details</th></tr></thead>

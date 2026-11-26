@@ -4,7 +4,6 @@ backend/target/
 backend/data/
 backend/scan/.venv/
 backend/scan/__pycache__/
-backend/scan/*.onnx
 backend/scan/*.part
 backend/scan/build/
 backend/scan/dist/
@@ -17,3 +16,4 @@ dist-desktop/
 .env.*
 !.env.example
 backend/scan/api_keys.py
+backend/scan/vendor/

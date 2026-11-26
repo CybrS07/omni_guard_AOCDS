@@ -60,6 +60,7 @@ pub async fn run(shutdown: impl Future<Output = ()> + Send + 'static) {
     crate::integrity::spawn(st.clone());
     crate::registry::spawn(st.clone());
     crate::regwatch::spawn(st.clone());
+    crate::regtree::spawn(st.clone());
     crate::schedules::spawn(st.clone());
     firewall::spawn_log_watcher(st.clone());
 

@@ -45,6 +45,15 @@ export function Quips({ every = 1700 }) {
 
 /** Full-screen loader shown until the agent answers. */
 export function BootScreen({ error, onRetry }) {
+  // ask the dev server / desktop app what the agent printed, so the real reason is on screen
+  const [report, setReport] = useState(null)
+  useEffect(() => {
+    if (!error) return undefined
+    let alive = true
+    fetch('/__services').then((r) => (r.ok ? r.json() : null)).then((d) => alive && setReport(d)).catch(() => {})
+    return () => { alive = false }
+  }, [error])
+  const lines = report?.agent?.lines ?? []
   return (
     <div className="boot">
       <div className="boot-card">
@@ -55,8 +64,10 @@ export function BootScreen({ error, onRetry }) {
           <div className="boot-error">
             <b>Agent not reachable.</b>
             <div className="muted" style={{ margin: '6px 0 10px' }}>
-              {error.message} Start everything from the project root with <code>npm run dev</code>.
+              {error.message} The agent may still be starting; if this stays, the reason is below.
             </div>
+            {report?.agent?.state === 'failed' && <div className="form-error">The agent stopped. Its last lines:</div>}
+            {lines.length > 0 && <pre className="hint" style={{ textAlign: 'left', maxHeight: 200, overflow: 'auto' }}>{lines.slice(-14).join('\n')}</pre>}
             <Button size="sm" icon="refresh" onClick={onRetry}>Try again</Button>
           </div>
         )}

@@ -58,6 +58,9 @@ pub struct Hidden {
     /// Readable version of an obfuscated script (layers removed, URLs, commands), made by the Python service.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deobf: Option<Value>,
+    /// Steps to check this item by hand with free tools (set by the Python service, for PDF scripts).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub howto: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -74,6 +77,8 @@ pub struct FileResult {
     pub hidden: Vec<Hidden>,
     pub zip: Option<Value>,
     pub vt: Option<Value>,
+    /// Hashes (md5/sha1/sha256/sha384), known-bad match and digital signature, from the Python service.
+    pub ident: Option<Value>,
     pub analysis: String, // "python" | "rust-only"
     pub note: String,
 }
@@ -761,7 +766,7 @@ fn trailing_check(f: &mut File, end: u64, total: u64, what: &str, kind: &str, fn
         "trailing-data", sev, title,
         format!("{kind} viewers stop at the end of the picture/video, so extra bytes here (offset {end}, {len} bytes) are invisible to the user but can be read by malware that knows where to look."),
     ));
-    hid.push(Hidden { place: format!("after the end of the {what}"), offset: end, length: len, kind: if pk == "binary" { tk.into() } else { pk.into() }, text, deobf: None });
+    hid.push(Hidden { place: format!("after the end of the {what}"), offset: end, length: len, kind: if pk == "binary" { tk.into() } else { pk.into() }, text, deobf: None, howto: None });
 }
 
 /// Run all the built-in checks on one file without opening it in any program.
@@ -819,7 +824,7 @@ fn local_scan(path: &Path, total: u64) -> Result<Local, String> {
     }
     for c in cands {
         let (text, k) = preview(&c.data);
-        hid.push(Hidden { place: c.place, offset: c.offset, length: c.data.len() as u64, kind: k.into(), text, deobf: None });
+        hid.push(Hidden { place: c.place, offset: c.offset, length: c.data.len() as u64, kind: k.into(), text, deobf: None, howto: None });
     }
 
     match kind.as_str() {
@@ -836,8 +841,8 @@ fn local_scan(path: &Path, total: u64) -> Result<Local, String> {
             }
             if js + jsl > 0 {
                 let auto = oa + aa > 0;
-                fnd.push(finding("pdf-js", if auto { "high" } else { "medium" }, if auto { "PDF runs JavaScript automatically" } else { "PDF contains JavaScript" },
-                    format!("{} JavaScript marker(s){}. Scripts inside PDFs are used to exploit readers and to download malware.", js + jsl, if auto { " with an automatic /OpenAction" } else { "" })));
+                fnd.push(finding("pdf-js", if auto { "high" } else { "medium" }, if auto { "PDF mentions JavaScript and has an automatic action" } else { "PDF mentions JavaScript (marker only)" },
+                    format!("The words /JavaScript or /JS appear {} time(s){}. This is only a marker found in the raw bytes; the deep scan opens the file and shows the real script if there is one.", js + jsl, if auto { ", next to an automatic /OpenAction" } else { "" })));
             }
             if emb > 0 {
                 fnd.push(finding("pdf-embedded", "medium", "PDF has embedded files", format!("{emb} embedded file(s) can hide programs or documents inside the PDF.")));
@@ -864,7 +869,7 @@ fn local_scan(path: &Path, total: u64) -> Result<Local, String> {
             let take = if partial { 0 } else { off as usize };
             let data = if partial { Vec::new() } else { buf[take..buf.len().min(take + 96)].to_vec() };
             let hex: Vec<String> = data.iter().map(|b| format!("{b:02x}")).collect();
-            hid.push(Hidden { place: "inside the file".into(), offset: off, length: 0, kind: "pe".into(), text: hex.join(" "), deobf: None });
+            hid.push(Hidden { place: "inside the file".into(), offset: off, length: 0, kind: "pe".into(), text: hex.join(" "), deobf: None, howto: None });
         }
     }
     Ok(Local { kind, findings: fnd, hidden: hid, zip })
@@ -889,13 +894,13 @@ fn sha256_of(path: &Path, size: u64) -> String {
 }
 
 /// Check one file from start to finish and return its result with a verdict.
-fn scan_file(st: &Shared, path: &Path, allow_vt: bool, py_ok: &mut u8) -> FileResult {
+pub(crate) fn scan_file(st: &Shared, path: &Path, allow_vt: bool, py_ok: &mut u8) -> FileResult {
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let mut r = FileResult {
         at: crate::util::now_iso(),
         path: path.display().to_string(), name, size, sha256: String::new(), kind: "unknown".into(), verdict: "clean".into(),
-        score: 0, findings: vec![], hidden: vec![], zip: None, vt: None, analysis: "rust-only".into(), note: String::new(),
+        score: 0, findings: vec![], hidden: vec![], zip: None, vt: None, ident: None, analysis: "rust-only".into(), note: String::new(),
     };
     if size == 0 {
         return r;
@@ -914,8 +919,10 @@ fn scan_file(st: &Shared, path: &Path, allow_vt: bool, py_ok: &mut u8) -> FileRe
         }
     }
     // 4) hand over to Python: pixels, script text, archive contents, VirusTotal
-    // Python is only asked about files it can add something for (a full drive has far too many other files)
-    let needs_py = !r.findings.is_empty() || !r.hidden.is_empty() || matches!(r.kind.as_str(), "png" | "bmp" | "gif" | "webp" | "tiff" | "script" | "zip" | "pdf") || (allow_vt && r.kind == "pe");
+    // Every file up to 64 MB goes to Python, because YARA (the main offline detector) must see them all.
+    // Bigger files are only sent when they already look interesting, or when they are pictures / scripts / archives.
+    let small_enough_for_yara = size <= 64 * 1024 * 1024;
+    let needs_py = small_enough_for_yara || !r.findings.is_empty() || !r.hidden.is_empty() || matches!(r.kind.as_str(), "png" | "bmp" | "gif" | "webp" | "tiff" | "script" | "zip" | "pdf") || (allow_vt && r.kind == "pe");
     if needs_py && *py_ok < 3 && size <= 512 * 1024 * 1024 {
         let body = json!({
             "path": r.path, "name": r.name, "size": r.size, "sha256": r.sha256, "kind": r.kind,
@@ -931,6 +938,7 @@ fn scan_file(st: &Shared, path: &Path, allow_vt: bool, py_ok: &mut u8) -> FileRe
                     r.hidden = h;
                 }
                 r.vt = v.get("vt").filter(|x| !x.is_null()).cloned();
+                r.ident = v.get("ident").filter(|x| !x.is_null()).cloned();
                 r.note = v["note"].as_str().unwrap_or("").to_string();
                 r.analysis = "python".into();
             }

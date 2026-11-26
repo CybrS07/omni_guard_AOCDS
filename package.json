@@ -5,17 +5,20 @@
   "description": "Omni Guard AOCDS: Rust agent (service) + React/Vite dashboard",
   "scripts": {
     "setup": "npm install && npm --prefix frontend install && uv sync --project backend/scan",
-    "dev": "npm --prefix frontend run dev",
+    "dev": "node scripts/dev.cjs",
+    "dev:noadmin": "node scripts/dev.cjs --no-admin",
     "ui": "npm --prefix frontend run dev:ui",
     "agent": "cd backend && cargo run",
     "scan": "uv run --project backend/scan --directory backend/scan uvicorn server:app --host 127.0.0.1 --port 8000",
     "build": "cd backend && cargo build --release && npm --prefix ../frontend run build",
     "build:ui": "npm --prefix frontend run build",
     "build:agent": "cd backend && cargo build --release",
+    "train": "uv run --project backend/scan --directory backend/scan python train_ai.py",
     "build:scan": "uv run --project backend/scan --with pyinstaller python backend/scan/build.py",
     "desktop:setup": "npm --prefix desktop install",
-    "desktop:dev": "concurrently -k -n app,win -c cyan,magenta \"npm run dev\" \"npm --prefix desktop run dev\"",
-    "desktop:build": "npm run build:ui && npm run build:agent && npm run build:scan && npm --prefix desktop run dist"
+    "desktop:dev": "concurrently -n app,win -c cyan,magenta \"npm run dev\" \"npm --prefix desktop run dev\"",
+    "build:exe": "node scripts/build-exe.cjs",
+    "desktop:build": "npm run desktop:setup && npm run build:ui && npm run build:agent && npm run build:scan && npm --prefix desktop run dist"
   },
   "devDependencies": {
     "concurrently": "^9.0.0"

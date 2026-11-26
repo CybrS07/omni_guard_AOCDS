@@ -15,9 +15,13 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
+import json
+import os
 import random
 import string
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -26,7 +30,13 @@ import aimodel
 from aimodel import FEATURES, LABELS, featurize
 
 HIDDEN = 48
-rnd = random.Random(7)
+SEED = 7
+rnd = random.Random(SEED)
+
+
+def say(text: str) -> None:
+    """Where progress lines go. The command line prints them; the scan service swaps this for its own log."""
+    print(text)
 
 
 # ---------------------------------------------------------------- generators
@@ -198,6 +208,12 @@ PROSE = ["The quick brown fox jumps over the lazy dog.", "Meeting notes: we disc
 def real_benign(extra: list[Path]) -> list[tuple[str, str]]:
     """Harmless scripts that already exist on this computer, as (group, text). Group = the file path, used to split train/test."""
     roots = [Path(p) for p in ("/usr/lib/python3", "/usr/share", "/usr/bin", "/etc", "/usr/lib/node_modules")] + [Path(__file__).resolve().parents[2] / "frontend" / "node_modules"] + extra
+    if os.name == "nt":
+        # harmless scripts that come with Windows and with installed programs
+        system = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+        roots += [system / "System32" / "WindowsPowerShell", system / "System32" / "Printing_Admin_Scripts",
+                  Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "nodejs",
+                  Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "etc"]
     exts = {".py", ".sh", ".js", ".pl", ".rb", ".bash", ".ps1", ".bat", ".cmd", ".vbs", ".txt", ".md", ".json", ".html", ".css", ".conf"}
     out: list[tuple[str, str]] = []
     for root in roots:
@@ -239,41 +255,69 @@ def dense(batch, idx_val):
     return X
 
 
-def train(samples, epochs=25, lr=0.01, seed=0):
+def gpu_available() -> bool:
+    """True when CuPy (NumPy on an NVIDIA graphics card) is installed AND a card is present.
+    The packaged app does not bundle CuPy (it is ~1 GB), so on most PCs this is False and training uses the CPU."""
+    try:
+        import cupy  # noqa: F401
+
+        return cupy.cuda.runtime.getDeviceCount() > 0
+    except Exception:
+        return False
+
+
+def train(samples, epochs=25, lr=0.01, seed=0, throttle=0.0, gpu=False):
+    """Train the 2-layer classifier.
+
+    gpu       use the graphics card through CuPy when it is available (same maths, much faster)
+    throttle  0 = full speed. 0.5 = after every step rest as long as the step took, so the work uses about
+              half of the processor. Used for the training that runs by itself in the background.
+    """
+    if gpu and gpu_available():
+        import cupy as xp
+
+        say("  using the graphics card (GPU)")
+        on_gpu = True
+    else:
+        xp, on_gpu = np, False
     r = np.random.default_rng(seed)
     iv = [featurize(t) for _, t in samples]
-    y = np.array([LABELS.index(l) for l, _ in samples])
+    y = xp.asarray(np.array([LABELS.index(l) for l, _ in samples]))
     n, C = len(samples), len(LABELS)
-    W1 = (r.standard_normal((FEATURES, HIDDEN)) * np.sqrt(2.0 / 64)).astype(np.float32)
-    b1 = np.zeros(HIDDEN, np.float32)
-    W2 = (r.standard_normal((HIDDEN, C)) * np.sqrt(2.0 / HIDDEN)).astype(np.float32)
-    b2 = np.zeros(C, np.float32)
+    W1 = xp.asarray((r.standard_normal((FEATURES, HIDDEN)) * np.sqrt(2.0 / 64)).astype(np.float32))
+    b1 = xp.zeros(HIDDEN, np.float32)
+    W2 = xp.asarray((r.standard_normal((HIDDEN, C)) * np.sqrt(2.0 / HIDDEN)).astype(np.float32))
+    b2 = xp.zeros(C, np.float32)
     params = [W1, b1, W2, b2]
-    m = [np.zeros_like(p) for p in params]
-    v = [np.zeros_like(p) for p in params]
+    m = [xp.zeros_like(p) for p in params]
+    v = [xp.zeros_like(p) for p in params]
     t = 0
     # class weights: errors on "benign" cost more, so harmless scripts are not called dangerous
     cw = np.ones(C, np.float32)
     cw[0] = 2.0
+    cw = xp.asarray(cw)
+    rest = throttle / (1.0 - throttle) if 0 < throttle < 1 else 0.0
     for ep in range(epochs):
         order = r.permutation(n)
         loss_sum = 0.0
         for s in range(0, n, 64):
+            started = time.perf_counter()
             b = order[s:s + 64]
-            X = dense(b, iv)
+            X = xp.asarray(dense(b, iv))
             h_pre = X @ W1 + b1
-            h = np.maximum(h_pre, 0)
+            h = xp.maximum(h_pre, 0)
             # light dropout on the hidden layer
-            mask = (r.random(h.shape) > 0.1).astype(np.float32) / 0.9
+            mask = xp.asarray((r.random(tuple(h.shape)) > 0.1).astype(np.float32) / 0.9)
             hd = h * mask
             z = hd @ W2 + b2
             z -= z.max(1, keepdims=True)
-            p = np.exp(z)
+            p = xp.exp(z)
             p /= p.sum(1, keepdims=True)
-            yy = y[b]
-            loss_sum += float(-(np.log(p[np.arange(len(b)), yy] + 1e-9) * cw[yy]).sum())
+            yy = y[xp.asarray(b)]
+            rows = xp.arange(len(b))
+            loss_sum += float(-(xp.log(p[rows, yy] + 1e-9) * cw[yy]).sum())
             dz = p.copy()
-            dz[np.arange(len(b)), yy] -= 1
+            dz[rows, yy] -= 1
             dz *= cw[yy][:, None] / len(b)
             gW2 = hd.T @ dz
             gb2 = dz.sum(0)
@@ -284,10 +328,13 @@ def train(samples, epochs=25, lr=0.01, seed=0):
             for k, (pa, g) in enumerate(zip(params, [gW1, gb1, gW2, gb2])):
                 m[k] = 0.9 * m[k] + 0.1 * g
                 v[k] = 0.999 * v[k] + 0.001 * g * g
-                pa -= lr * (m[k] / (1 - 0.9 ** t)) / (np.sqrt(v[k] / (1 - 0.999 ** t)) + 1e-8)
+                pa -= lr * (m[k] / (1 - 0.9 ** t)) / (xp.sqrt(v[k] / (1 - 0.999 ** t)) + 1e-8)
+            if rest:
+                time.sleep((time.perf_counter() - started) * rest)   # background mode: leave the other half to the user
         if ep % 5 == 4 or ep == epochs - 1:
-            print(f"  epoch {ep + 1:2d}/{epochs}  loss {loss_sum / n:.4f}")
-    return W1, b1, W2, b2
+            say(f"  epoch {ep + 1:2d}/{epochs}  loss {loss_sum / n:.4f}")
+    out = [x.get() if on_gpu else x for x in (W1, b1, W2, b2)]
+    return tuple(out)
 
 
 def quantize(W: np.ndarray):
@@ -310,27 +357,34 @@ def evaluate(model, samples, title):
         pred = model.predict(t)["label"]
         conf[LABELS.index(l), LABELS.index(pred)] += 1
         ok += pred == l
-    print(f"{title}: {ok}/{len(samples)} correct ({100 * ok / max(len(samples), 1):.1f}%)")
+    say(f"{title}: {ok}/{len(samples)} correct ({100 * ok / max(len(samples), 1):.1f}%)")
     return conf
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--benign", action="append", default=[], help="folder of harmless scripts (repeatable)")
-    ap.add_argument("--malicious", action="append", default=[], help="folder of malicious scripts; sub-folders named like the classes set the class, otherwise 'downloader'")
-    ap.add_argument("--per-class", type=int, default=900)
-    ap.add_argument("--epochs", type=int, default=25)
-    ap.add_argument("--out", default=str(aimodel.MODEL_FILE))
-    a = ap.parse_args()
+def run_training(benign=None, malicious=None, per_class=900, epochs=25, out=None, seed=SEED, log=None, throttle=0.0, gpu=False) -> dict:
+    """Train the classifier and save it as int8. Returns a small report (also written next to the model as train_info.json).
+
+    benign / malicious : extra folders of real samples (optional)
+    out                : where to write the .npz (default: the model shipped with the app)
+    seed               : same seed = same weights; the scan service passes a new seed so a retrain really changes them
+    log                : function that receives progress lines
+    throttle           : 0.5 = use about half of the processor (background training)
+    gpu                : use the graphics card when CuPy and a card are present
+    """
+    global say
+    if log is not None:
+        say = log
+    rnd.seed(seed)
+    out_path = Path(out) if out else aimodel.BUNDLED_MODEL
 
     samples: list[tuple[str, str]] = []
     for lab, g in GENS.items():
-        k = a.per_class * (2 if lab == "benign" else 1)
+        k = per_class * (2 if lab == "benign" else 1)
         samples += [(lab, g()) for _ in range(k)]
     samples += [("benign", rnd.choice(PROSE) + "\n" + rnd.choice(PROSE)) for _ in range(150)]
-    real = real_benign([Path(p) for p in a.benign])
-    print(f"generated {len(samples)} samples, {len(real)} real harmless files found on this computer")
-    for folder in a.malicious:
+    real = real_benign([Path(p) for p in (benign or [])])
+    say(f"generated {len(samples)} samples, {len(real)} real harmless files found on this computer")
+    for folder in (malicious or []):
         for lab, _, text in read_folder(Path(folder), "downloader"):
             samples.append((lab, text))
     # real harmless files: split by file so the test set is files the model never saw
@@ -342,22 +396,50 @@ def main():
     k = int(len(samples) * 0.9)
     train_set, test_set = samples[:k], samples[k:]
 
-    print(f"training on {len(train_set)} samples ({FEATURES} features, {HIDDEN} hidden units)")
-    W1, b1, W2, b2 = train(train_set, epochs=a.epochs)
-    out = Path(a.out)
-    save(W1, b1, W2, b2, out)
-    model = aimodel.Model(out)
-    print(f"saved {out} ({out.stat().st_size / 1024:.0f} KB, int8 weights; float32 would be {(W1.size + W2.size) * 4 / 1024:.0f} KB)")
+    say(f"training on {len(train_set)} samples ({FEATURES} features, {HIDDEN} hidden units)")
+    W1, b1, W2, b2 = train(train_set, epochs=epochs, seed=seed, throttle=throttle, gpu=gpu)
+
+    # write to a temporary file first, check it loads, then move it into place
+    tmp = out_path.with_name(out_path.stem + ".tmp.npz")
+    save(W1, b1, W2, b2, tmp)
+    aimodel.check_file(tmp)
+    os.replace(tmp, out_path)
+    model = aimodel.Model(out_path)
+    say(f"saved {out_path} ({out_path.stat().st_size / 1024:.0f} KB, int8 weights; float32 would be {(W1.size + W2.size) * 4 / 1024:.0f} KB)")
 
     conf = evaluate(model, test_set, "held-out generated + real samples")
-    print("confusion (rows = truth, columns = guess):", LABELS)
-    print(conf)
+    correct = int(np.trace(conf))
+    say("confusion (rows = truth, columns = guess): " + str(LABELS))
+    say(str(conf))
+    false_alarms, real_n = 0, len(real_test)
     if real_test:
         flagged = [(p, model.predict(t)) for p, t in real_test]
         bad = [(p, r) for p, r in flagged if r["label"] != "benign" and r["confidence"] >= 0.8]
-        print(f"harmless REAL files never seen in training: {len(real_test)}, wrongly flagged at >=80%: {len(bad)} ({100 * len(bad) / len(real_test):.2f}%)")
+        false_alarms = len(bad)
+        say(f"harmless REAL files never seen in training: {real_n}, wrongly flagged at >=80%: {false_alarms} ({100 * false_alarms / real_n:.2f}%)")
         for p, r in bad[:8]:
-            print("   ", r["label"], round(r["confidence"], 2), p)
+            say(f"    {r['label']} {round(r['confidence'], 2)} {p}")
+
+    digest = hashlib.sha256(out_path.read_bytes()).hexdigest()
+    report = {
+        "trained_at": time.time(), "seed": seed, "epochs": epochs, "samples": len(train_set),
+        "real_files": len(real), "test_accuracy": round(100 * correct / max(len(test_set), 1), 2),
+        "false_alarms": false_alarms, "real_test_files": real_n, "sha256": digest, "size_kb": round(out_path.stat().st_size / 1024),
+    }
+    out_path.with_name("train_info.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return report
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--benign", action="append", default=[], help="folder of harmless scripts (repeatable)")
+    ap.add_argument("--malicious", action="append", default=[], help="folder of malicious scripts; sub-folders named like the classes set the class, otherwise 'downloader'")
+    ap.add_argument("--per-class", type=int, default=900)
+    ap.add_argument("--epochs", type=int, default=25)
+    ap.add_argument("--seed", type=int, default=SEED)
+    ap.add_argument("--out", default=str(aimodel.BUNDLED_MODEL))
+    a = ap.parse_args()
+    run_training(a.benign, a.malicious, a.per_class, a.epochs, a.out, a.seed)
 
 
 if __name__ == "__main__":

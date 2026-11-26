@@ -897,11 +897,32 @@ fn publisher_trusted(signer: &str, saved: &Saved) -> bool {
     saved.trusted_publishers.iter().any(|p| !p.trim().is_empty() && s.contains(&p.trim().to_lowercase()))
 }
 
+/// Microsoft Store (MSIX) apps live in a protected folder that a normal user cannot read, and that folder name carries
+/// the package family: `<Name>_<version>_<arch>__<publisher id>`. Returns the app name when the path is such a folder.
+fn store_app_of(path: &str) -> Option<(String, bool)> {
+    let i = path.find("\\windowsapps\\")?;
+    let rest = &path[i + "\\windowsapps\\".len()..];
+    let folder = rest.split('\\').next().unwrap_or("");
+    if folder.is_empty() || folder.starts_with('.') {
+        return None;
+    }
+    let name = folder.split('_').next().unwrap_or(folder).to_string();
+    // 8wekyb3d8bbwe is the publisher id of Microsoft's own packages (Teams, Calculator, Photos ...)
+    Some((name, folder.ends_with("__8wekyb3d8bbwe")))
+}
+
+/// A signature check that could not run (access denied, file locked) says nothing about the file. Only these answers
+/// are real evidence against it.
+fn signature_is_bad(sig: Option<&Sig>) -> bool {
+    matches!(sig.map(|s| s.status.as_str()), Some("NotSigned" | "HashMismatch" | "NotTrusted" | "Incompatible"))
+}
+
 /// Decide whether a file needs its digital signature checked. Trusted, official and already-owned files are skipped.
 fn needs_signature(t: &Target, cx: &Ctx, id: &str) -> bool {
     t.bad_inline.is_none()
         && !cx.saved.trusted_ids.iter().any(|x| x == id)
         && !is_official_path(&t.path, &cx.win)
+        && store_app_of(&t.path).is_none()
         && cx.be.file_exists(&t.shown)
         && owner_of(&t.path, cx).is_none()
 }
@@ -956,6 +977,14 @@ fn classify(raw: &Raw, id: &str, cx: &Ctx, sigs: &HashMap<String, Sig>) -> Verdi
     if cx.saved.trusted_folders.iter().any(|f| !f.trim().is_empty() && under(&t.path, f)) {
         return v("trusted", "your trusted folder", "The file is inside a folder you trust.");
     }
+    // Store apps (Teams, Calculator ...): their folder cannot be read without administrator rights, so judge by the package name
+    if let Some((app, microsoft)) = store_app_of(&t.path) {
+        return if microsoft {
+            v("official", "Microsoft Store", format!("{app} is a Microsoft Store app published by Microsoft{how}."))
+        } else {
+            v("software", format!("{app} (Microsoft Store)"), format!("{app} is a Microsoft Store app. The Store checks apps before they are installed{how}."))
+        };
+    }
     if !cx.be.file_exists(&t.shown) {
         if let Some(r) = drive_root(&t.path) {
             if !cx.be.file_exists(&r) {
@@ -982,7 +1011,12 @@ fn classify(raw: &Raw, id: &str, cx: &Ctx, sigs: &HashMap<String, Sig>) -> Verdi
         }
         _ => {}
     }
-    // nothing owns it
+    // nothing owns it. A signature check that simply could not run is "cannot tell", not "malware",
+    // unless the file also sits where malware likes to hide.
+    let risky_place = USER_WRITABLE.iter().any(|m| t.path.contains(m)) || under(&t.path, &format!("{}\\temp", cx.win)) || looks_random(file_name(&t.path).split('.').next().unwrap_or(""));
+    if !signature_is_bad(sigs.get(&t.path)) && !risky_place {
+        return v("unknown", "", format!("{} exists but its signature could not be read and no installed software claims it. Run the agent as Administrator so it can check, or mark it trusted if you know it.", t.shown));
+    }
     let mut reasons = vec![format!("No installed software and no official source owns {}{how}.", t.shown)];
     reasons.push(match sigs.get(&t.path) {
         Some(s) => format!("The file has no valid digital signature ({}).", if s.status.is_empty() { "unknown" } else { &s.status }),
@@ -1621,6 +1655,36 @@ impl Store {
         let k = key.to_lowercase();
         (k.starts_with("hklm\\") || k.starts_with("hku\\"))
             && ["\\currentversion\\run", "\\policies\\explorer\\run", "\\app paths\\", "\\currentversion\\uninstall\\", "\\currentcontrolset\\services\\", "\\image file execution options\\", "\\active setup\\installed components\\"].iter().any(|m| k.contains(m))
+    }
+
+    /// Open Registry Editor (regedit) so it shows the key of one entry.
+    /// Regedit remembers the last key it showed in HKCU\...\Applets\Regedit\LastKey; we write the wanted key there and start it.
+    pub fn open_in_regedit(&self, id: &str) -> Result<String, String> {
+        let e = self.entry(id).ok_or("entry not found - scan again")?;
+        if !Self::key_allowed(&e.key) {
+            return Err("This key is not one the guard manages.".into());
+        }
+        if !cfg!(windows) {
+            return Err("Registry Editor exists only on Windows. Use the manual steps instead.".into());
+        }
+        // HKLM\SOFTWARE\X  ->  Computer\HKEY_LOCAL_MACHINE\SOFTWARE\X
+        let (hive, rest) = e.key.split_once('\\').unwrap_or((e.key.as_str(), ""));
+        let long = match hive.to_uppercase().as_str() {
+            "HKLM" => "HKEY_LOCAL_MACHINE",
+            "HKU" => "HKEY_USERS",
+            "HKCU" => "HKEY_CURRENT_USER",
+            "HKCR" => "HKEY_CLASSES_ROOT",
+            _ => return Err("Unknown registry root.".into()),
+        };
+        let full = format!("Computer\\{long}\\{rest}");
+        run(
+            "reg",
+            &["add", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Applets\Regedit", "/v", "LastKey", "/t", "REG_SZ", "/d", &full, "/f"],
+            10,
+        );
+        // /m lets a second Registry Editor open even if one is already running (otherwise it would not jump to the key)
+        std::process::Command::new("regedit.exe").arg("/m").spawn().map_err(|e| format!("could not start Registry Editor: {e}"))?;
+        Ok("Registry Editor was started. If no window appears (the agent runs as a background service), use the manual steps.".into())
     }
 
     /// Delete an entry the guard classified as orphan (any kind) or malware (startup / App Paths). A point is taken first.

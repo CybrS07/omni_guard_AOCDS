@@ -7,6 +7,7 @@ function actionBadge(action) {
   if (action === 'alerted') return <Badge color="red">Alert</Badge>
   if (action === 'ours') return <Badge color="blue" variant="light">Omni Guard</Badge>
   if (action && action.startsWith('undo failed')) return <Badge color="orange" title={action}>Undo failed</Badge>
+  if (action === 'logged') return <Badge color="gray" variant="light">Logged</Badge>
   return <Badge color="gray" variant="light">Allowed</Badge>
 }
 
@@ -19,12 +20,13 @@ const WHO = {
   'script-host': { color: 'yellow', text: 'script / tool' },
   unverified: { color: 'red', text: 'unverified' },
   ours: { color: 'blue', text: 'Omni Guard' },
+  unknown: { color: 'gray', text: 'not named' },
 }
 
 /** Who changed which registry value, and what the guard did. */
 export default function ChangesTable({ changes }) {
   if (!changes || changes.length === 0) {
-    return <div className="empty">No changes yet. Changes to startup keys appear here with the program that made them.</div>
+    return <div className="empty">No changes yet. Every change in the registry (all roots, down to the last sub key) appears here. Startup keys also show the program that made the change.</div>
   }
   return (
     <div className="table-wrap">

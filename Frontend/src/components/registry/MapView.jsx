@@ -1,4 +1,6 @@
 import { Accordion, Badge } from '@mantine/core'
+import { useState } from 'react'
+import HowToFind from './HowToFind.jsx'
 
 // The order in which the pieces of one app are drawn: installed -> starts with Windows -> service -> ...
 const CHAIN = [
@@ -40,6 +42,7 @@ function Chain({ kinds }) {
  * that belong to it, linked together. The box "No owner" holds everything nothing owns.
  */
 export default function MapView({ groups }) {
+  const [find, setFind] = useState(null) // the entry whose "how to find it yourself" window is open
   if (!groups || groups.length === 0) {
     return <div className="empty">The map is empty until the registry has been read.</div>
   }
@@ -48,6 +51,7 @@ export default function MapView({ groups }) {
   const opened = groups.filter((g) => g.kind === 'none' || g.bad > 0).map((g) => g.name)
 
   return (
+    <>
     <Accordion multiple defaultValue={opened} variant="separated">
       {groups.map((g) => (
         <Accordion.Item key={g.name} value={g.name}>
@@ -67,6 +71,7 @@ export default function MapView({ groups }) {
                   <b>{e.name}</b>
                   <span className="muted">{e.kind}</span>
                   <span className="mono hint" style={{ wordBreak: 'break-all' }}>{e.target}</span>
+                  <button type="button" className="hint" style={{ background: 'none', border: 0, cursor: 'pointer', textDecoration: 'underline', color: 'inherit' }} onClick={() => setFind(e)}>find it</button>
                 </div>
               ))}
             </div>
@@ -74,5 +79,7 @@ export default function MapView({ groups }) {
         </Accordion.Item>
       ))}
     </Accordion>
+      <HowToFind entry={find} onClose={() => setFind(null)} />
+    </>
   )
 }

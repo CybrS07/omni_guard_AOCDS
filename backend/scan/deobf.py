@@ -198,7 +198,13 @@ def _escapes(text: str):
     sub(r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)))
     sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)))
     sub(r"%u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)))
-    sub(r"(?:%[0-9a-fA-F]{2}){4,}", lambda m: re.sub(r"%([0-9a-fA-F]{2})", lambda x: chr(int(x.group(1), 16)), m.group(0)))
+    # a run of %xx pieces counts once per piece (JavaScript unescape('%61%70%70...') is one long run)
+    def percent_run(m: re.Match) -> str:
+        nonlocal count
+        count += len(m.group(0)) // 3
+        return re.sub(r"%([0-9a-fA-F]{2})", lambda x: chr(int(x.group(1), 16)), m.group(0))
+
+    new = re.sub(r"(?:%[0-9a-fA-F]{2}){4,}", percent_run, new)
     sub(r"&#(\d{2,3});", lambda m: chr(int(m.group(1))))
     if count >= 3 and new != text and _printable(new) >= 0.8:
         return new, "Escape sequences (\\x, \\u, %xx)"

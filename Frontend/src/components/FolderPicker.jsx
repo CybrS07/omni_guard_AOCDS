@@ -12,7 +12,7 @@ export default function FolderPicker({ files = false, onPick, onClose, start = '
 
   const go = async (p) => {
     try {
-      setD(await api(`/filescan/browse?path=${encodeURIComponent(p || '')}&files=${files ? 1 : 0}`))
+      setD(await api(`/filescan/browse?path=${encodeURIComponent(p || '')}&files=${files ? 'true' : 'false'}`))
       setErr('')
     } catch (e) {
       setErr(e.message)

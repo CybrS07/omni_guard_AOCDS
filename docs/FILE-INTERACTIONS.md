@@ -41,13 +41,12 @@ Regenerate after big changes with `python docs/gen_interactions.py`.
 | File | Imports |
 |---|---|
 | `aimodel.py` | - |
-| `build.py` | `face_model.py` |
+| `build.py` | `train_ai.py`, `yara_engine.py`, `aimodel.py` |
 | `domaincheck.py` | `intel.py` |
-| `face_model.py` | - |
 | `filescan.py` | `aimodel.py`, `intel.py` |
 | `intel.py` | - |
 | `run.py` | `server.py` |
-| `scan.py` | `face_model.py`, `intel.py` |
+| `accounts.py` | - |
 | `server.py` | `domaincheck.py`, `filescan.py`, `intel.py`, `scan.py` |
 | `train_ai.py` | `aimodel.py` |
 
@@ -88,8 +87,7 @@ Regenerate after big changes with `python docs/gen_interactions.py`.
 | `pages/Scan.jsx` | `api.js`, `components/Button.jsx`, `components/ExportBar.jsx`, `components/Feedback.jsx`, `components/Icon.jsx`, `components/SoftwarePanel.jsx`, `export.js`, `format.js` |
 | `pages/Settings.jsx` | `api.js`, `components/Icon.jsx`, `components/KeysForm.jsx`, `components/Loader.jsx`, `components/NvdNotice.jsx`, `components/settings/Accounts.jsx`, `components/settings/FaceLevel.jsx`, `components/settings/Folders.jsx`, `components/settings/Integrity.jsx`, `components/settings/Services.jsx`, `scan/scanApi.js`, `theme/ThemeToggle.jsx` |
 | `pages/System.jsx` | `api.js`, `components/Button.jsx`, `components/Feedback.jsx`, `components/Icon.jsx`, `components/Loader.jsx`, `format.js` |
-| `scan/FaceCam.jsx` | `scan/scanApi.js` |
-| `scan/ScanGate.jsx` | `components/Button.jsx`, `components/Loader.jsx`, `scan/FaceCam.jsx`, `scan/scanApi.js` |
+| `scan/ScanGate.jsx` | `components/Button.jsx`, `components/Loader.jsx`, `scan/scanApi.js` |
 | `scan/scanApi.js` | - |
 | `theme/ThemeProvider.jsx` | - |
 | `theme/ThemeToggle.jsx` | `components/Icon.jsx`, `theme/ThemeProvider.jsx` |
@@ -150,8 +148,7 @@ The dashboard reaches them as `/scan-api/...`; the Rust agent calls some directl
 
 | Method | Route | File | Called from |
 |---|---|---|---|
-| POST | `/api/detect` | `server.py` | `scan/FaceCam.jsx` |
-| POST | `/api/enroll` | `server.py` | `scan/ScanGate.jsx` |
+| `scan/ScanGate.jsx` | `components/Button.jsx`, `components/Loader.jsx`, `scan/scanApi.js` |
 | POST | `/api/face/required` | `server.py` | `components/settings/FaceLevel.jsx` |
 | POST | `/api/face/threshold` | `server.py` | `components/settings/FaceLevel.jsx` |
 | GET | `/api/filescan/ai` | `filescan.py` | not used by the dashboard |
@@ -163,9 +160,9 @@ The dashboard reaches them as `/scan-api/...`; the Rust agent calls some directl
 | POST | `/api/intel/hash` | `intel.py` | `components/CheckServices.jsx` |
 | POST | `/api/intel/software` | `intel.py` | `components/CheckServices.jsx`, `intel_client.rs` / `downloads.rs` / `software.rs` / `filescan.rs` (Rust agent) |
 | GET | `/api/intel/status` | `intel.py` | `components/CheckServices.jsx`, `components/KeysForm.jsx`, `pages/Settings.jsx` |
-| POST | `/api/login` | `server.py` | `scan/ScanGate.jsx` |
+| `scan/ScanGate.jsx` | `components/Button.jsx`, `components/Loader.jsx`, `scan/scanApi.js` |
 | GET | `/api/logs` | `server.py` | not used by the dashboard |
-| GET | `/api/status` | `server.py` | `scan/ScanGate.jsx` |
+| `scan/ScanGate.jsx` | `components/Button.jsx`, `components/Loader.jsx`, `scan/scanApi.js` |
 | GET | `/api/users` | `server.py` | `components/settings/Accounts.jsx`, `scan/ScanGate.jsx` |
 | POST | `/api/users/add` | `server.py` | `components/settings/Accounts.jsx` |
 | POST | `/api/users/delete` | `server.py` | `components/settings/Accounts.jsx` |

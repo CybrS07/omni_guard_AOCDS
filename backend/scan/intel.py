@@ -362,26 +362,32 @@ def software(sw: SoftwareIn):
 
 # ---------------------------------------------------------------- manual checks (Downloads page "Check services")
 class HashIn(BaseModel):
-    sha256: str = Field(pattern=r"^[A-Fa-f0-9]{64}$")
+    # MD5 (32) or SHA-256 (64). The local malware list is checked first, then VirusTotal.
+    sha256: str = Field(pattern=r"^([A-Fa-f0-9]{32}|[A-Fa-f0-9]{64})$")
 
 
 @router.post("/hash")
 def hash_check(h: HashIn):
-    """Look one SHA-256 up on VirusTotal (nothing is uploaded)."""
+    """Look one hash up (nothing is uploaded): the local known-bad list first, then VirusTotal."""
+    import fileid
     k = keys()
     sha = h.sha256.lower()
-    vt = vt_lookup(sha, k["vt"])
+    kind = fileid.hash_kind(sha)
+    local = fileid.load_known_bad().get(sha, "")
     notes = []
+    vt = vt_lookup(sha, k["vt"])
+    if local:
+        notes.insert(0, f"On the local malware list: {local}.")
     if not vt["configured"]:
         notes.append("VirusTotal key not set: add VT_API_KEY to the .env file (or paste it in Settings).")
     if vt["error"]:
         notes.append(vt["error"])
     if vt["configured"] and not vt["error"] and not vt["known"]:
         notes.append("No record found: VirusTotal has never seen this file.")
-    status = "unknown"
-    if vt["known"]:
+    status = "malware" if local else "unknown"
+    if vt["known"] and not local:
         status = "malware" if vt["malicious"] >= MALWARE_AT else "suspicious" if vt["malicious"] + vt["suspicious"] > 0 else "clean"
-    return {"sha256": sha, "status": status, "vt": vt, "notes": notes, "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+    return {"sha256": sha, "kind": kind, "local_match": local, "status": status, "vt": vt, "notes": notes, "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
 
 
 # ---------------------------------------------------------------- settings (API keys -> .env)

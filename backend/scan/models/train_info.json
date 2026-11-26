@@ -1,0 +1,12 @@
+{
+  "trained_at": 1795675194.778647,
+  "seed": 7,
+  "epochs": 25,
+  "samples": 6821,
+  "real_files": 1412,
+  "test_accuracy": 99.74,
+  "false_alarms": 0,
+  "real_test_files": 283,
+  "sha256": "e07238d814d14b658acc00548f051aab24a05ac06195c77da7dd952a2e86bca2",
+  "size_kb": 316
+}

@@ -1,0 +1,5 @@
+# Known-bad file hashes: one per line, MD5 or SHA-256, then an optional name. "#" starts a comment.
+# Git sync can replace this file (put it in the repo's rules/ folder as known-bad-hashes.txt).
+# EICAR is the harmless industry test string, so you can see the detection work:
+44d88612fea8a8f36de82e1278abb02f  EICAR test file (md5)
+275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f  EICAR test file (sha256)

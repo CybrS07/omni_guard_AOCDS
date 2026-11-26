@@ -8,12 +8,12 @@ turns them into alerts and lets one person look at everything in one dashboard w
 | Dashboard | `collector.rs`, `alert.rs`, `events.rs` | Live status, alerts, Windows event log |
 | Firewall | `firewall.rs`, `ports.rs`, `dns.rs`, `netwatch.rs` | Rules, open ports, domain blocking, suspicious traffic |
 | Downloads | `downloads.rs`, `isolation.rs`, `filescan.rs` | New files are held and checked; allow, keep isolated or remove |
-| Scan | `filescan.rs`, `scan/filescan.py`, `scan/deobf.py`, `software.rs` | Hidden scripts (with the readable, de-scrambled script), zip bombs, vulnerable software |
-| Registry | `registry.rs`, `regwatch.rs` | Every registry entry must belong to software or an official source; map of apps and their entries; who changed what; restore points |
+| Scan | `filescan.rs`, `scan/filescan.py`, `scan/yara_engine.py`, `scan/deobf.py`, `software.rs` | Hidden scripts (with the readable, de-scrambled script), zip bombs, vulnerable software |
+| Registry | `registry.rs`, `regwatch.rs`, `regtree.rs` | Every registry entry must belong to software or an official source; map of apps and their entries; who changed what; restore points |
 | Logs | `logs.rs`, `schedules.rs` | Searchable text / JSON logs, plus the **Schedules** tab: Windows scheduled tasks that start at boot or sign-in, fetched automatically every 10 minutes |
 | System | `system.rs` | Processes, services, hardware |
-| Settings | `settings.rs`, `integrity.rs`, `service.rs` | Services, folders, integrity guard, accounts, face level, API keys |
-| Login | `scan/scan.py` | Password, or face scan as second step |
+| Settings | `settings.rs`, `integrity.rs`, `service.rs` | Services, folders, integrity guard, accounts, updates (button + 48 h auto check), AI model, API keys |
+| Login | `scan/accounts.py` | Password sign-in; the first account is the administrator |
 
 ## Registry guard (registry.rs)
 1. First start: the Registry page asks which publishers, folders and software you trust (all optional).
@@ -43,6 +43,13 @@ A leftover entry is linked to the removed app whose old folder held its file.
 The **Changes** tab shows every change with the program that made it. Without administrator rights the guard still sees
 changes on its next scan but cannot name the program.
 
+## Whole-registry monitor (regtree.rs)
+- Walks **HKLM** and **HKU** (every loaded user) from the root to the last sub key. HKCR and HKCC are skipped on purpose: Windows builds them from those two roots, so they would only repeat them.
+- Uses Windows' own **last write time** on each key. A key whose time did not move is not read again; a key whose time moved is read and compared (new / removed key, new / removed / changed value). Sensitive places also keep the old values, so the alert shows **was / now**.
+- Sensitive places (Run keys, Winlogon, IFEO, services, policies, LSA, Defender exclusions, shell open commands ...) raise an alert at once. Everything else goes to Registry -> Changes with one summary alert. Known noisy places (recent files, caches, device lists) are not listed.
+- The first walk after start is the baseline. Changes made while the agent is off are not seen. This check cannot name the program; the audit events in `regwatch.rs` do that for the startup keys.
+- The comparison logic has unit tests (`cargo test regtree`). The walker itself uses the `winreg` crate and only builds on Windows.
+
 ## Schedules (schedules.rs)
 Fetches all Windows scheduled tasks every 10 minutes (and on "Fetch now"), marks the ones triggered at Boot or Logon as
 auto-start, and judges each task's program with the same owner check as the registry. Tasks with no owner raise an alert
@@ -58,3 +65,46 @@ a fully invisible channel would need a Windows named pipe instead of TCP.
 `scripts/uninstall-all.ps1` (run as administrator) removes the service, firewall rules, registry keys, all data
 (logs, restore points, quarantine, accounts, baselines, API token, ports), notes in your folders, the program and temp files.
 The Windows uninstaller runs it automatically (`desktop/build/installer.nsh`).
+
+## YARA and Git sync (scan service)
+- YARA is the primary offline engine; VirusTotal is an optional extra (hash lookup, needs a key and internet).
+- `scan/yara_engine.py` loads `scan/rules/*.yar` plus rules synced from git, and `filescan.analyze` runs it on the file and on every hidden payload and de-scrambled layer. Findings are named `yara-<RuleName>`; severity comes from the rule's `meta: severity`.
+- `scan/gitsync.py` (Settings -> Updates): **Update now** button plus an automatic check every **48 hours** (the time of the last check is saved, so a restart does not reset it). The repository, branch and token are NOT typed in the dashboard: they come from `.env` (`UPDATE_REPO`, `UPDATE_BRANCH`, `GIT_TOKEN`) or a shipped `update-source.json`. The repo holds `rules/`, `models/script_clf_int8.npz`, optional `rules/known-bad-hashes.txt` and `manifest.json`. Hash check, compile check and model load must all pass, then rules and model are hot-swapped. A bad update is rejected and the old rules keep running.
+- Process memory scan: `POST /api/yara/scan-process {pid}` (Windows, run as Administrator).
+- SQLite storage is planned for phase 2.
+
+## Local model training
+- Settings -> "Script AI model": **Train now** trains on this PC in about 30 s (generated samples + harmless scripts found here + optional folders), writes int8 weights to the data folder and hot-swaps them. **Go back** restores the shipped model. Live model = local training or Git sync, whichever wrote last.
+- `npm run train` retrains the shipped model from the command line. `npm run build:scan` trains it automatically, checks the YARA rules (and bundles a portable git on Windows) before packaging, so a fresh clone needs no manual prerequisite step.
+
+## Starting and building
+- `npm run dev` runs `scripts/dev.cjs` first. It installs the dashboard packages and the Python packages when missing, trains the script model if it is missing, checks that every YARA rule compiles and that Rust (cargo) is present, then starts the dashboard, which starts the Rust agent and the Python scan service. All three share one data folder (`backend/data`, set through `SOC_DATA_DIR`), so the secret token and the hidden ports always match and no request gets an empty 404. While a service is still starting the dashboard shows "still starting" instead of an error.
+- `npm run build:scan` bundles everything the installed app needs: the Python runtime, YARA, GitPython, the trained model, the rules and (Windows) a portable git. The installed app needs no extra download or install.
+- There is no camera or face scan. Sign-in is username and password; the first account is the administrator.
+
+## PDF scripts
+- The Rust scan only counts the words `/JavaScript`, `/JS`, `/OpenAction` in the raw bytes (a "marker"). The Python scan (`pdfjs.py`, pypdf) opens the PDF and extracts the real code. A found script is shown under Hidden scripts with its object number, what starts it and, if scrambled, the readable version. If no code is found, the finding says "marker only".
+- To confirm by hand (free tools): `pdfid.py file.pdf` (counts), `pdf-parser.py --search javascript file.pdf` then `pdf-parser.py -o <object> -f file.pdf` (prints the object decompressed), `qpdf --qdf --object-streams=disable file.pdf out.pdf` and search `out.pdf` for `/JS`, or `mutool show file.pdf <object>`. The dashboard shows the same steps under "How to check this yourself".
+
+## Registry verdicts
+- A program that cannot be read (Microsoft Store apps under `WindowsApps`, or a signature check that failed without administrator rights) is "cannot tell", not "malware". Store apps published by Microsoft are "official". "Malware" needs real evidence: a bad signature, or no owner plus a risky folder or a random name.
+
+## Malware verdict: YARA + VirusTotal + hashes + signature (scan service)
+`filescan.py` collects four independent clues per file and turns them into one list of findings, so the Scan page shows one verdict:
+- **YARA** rules (`rules/*.yar`, plus synced rules) on the file and on every hidden payload.
+- **Hashes** (`fileid.py`): MD5 and SHA-256 in one read (only these two on purpose). Order of the checks: **YARA first**, then the hashes and the signature, then **VirusTotal** as the second opinion (a hash is sent, never the file). "Check services" takes an MD5 or SHA-256.
+- **Local known-bad list** (`rules/known-bad-hashes.txt`, replaceable by Git sync): works offline. It ships with the harmless EICAR test hashes.
+- **Digital signature** (Windows only, `Get-AuthenticodeSignature`): a broken signature (file changed after signing) is critical, an untrusted one is high. "Not signed" alone is never called malware.
+
+## Scan service will not start on a PC ("DLL load failed while importing _ssl")
+Cause: another program (Git, Anaconda, Perl, an old OpenSSL) has its own copy of an OpenSSL DLL on the PATH, and Windows loaded that copy instead of the one packed with the app. Fix (built in): `desktop/main.cjs` starts the service with only its own folder and Windows on PATH, and `backend/scan/run.py` tells Windows to look in the service's folder first. If the service still stops, the window now shows its last log lines (also in `C:\ProgramData\SocMonitor\logs\scan-service.log`).
+
+## Changes in this version (summary)
+- **Updates:** Settings -> Updates has a frequency choice (50 min, 5 h, 12 h, 2 days, weekly, never) plus "Update now". The desktop app reads the same choice for its own update check. The portable exe only tells you a new file exists.
+- **Program updates:** Settings -> Program updates lists programs with a newer version from winget (vulnerable ones first) and updates one at a time (`appupdates.rs`).
+- **Accounts:** no roles. Everyone is equal and can change only their own password. The dashboard sends the signed-in name (`X-Omni-User`); the agent writes `AUDIT user=... action=...` for scans, File Integrity add / remove / accept / check, and program updates. The scan service does the same for updates and training.
+- **Registry:** `reganalyze.py` judges odd values (program inside a value, encrypted blob, encoded or download-and-run commands) with fixed rules + YARA + the AI model; startup entries that point to a missing file raise their own alert. Runs on every walk, round the clock.
+- **Downloads:** every file in the watched folders is captured (unfinished browser files and housekeeping files are skipped), isolated and content-checked (`filescan::scan_file`) before the VirusTotal / NVD answer. `rules/omni_linux.yar` covers Linux scripts and programs.
+- **Training:** first start after install trains a model on this PC in the background (`modeltrain.start_first_run`): graphics card if CuPy and a card exist, otherwise about 50% of the processor at lower priority. The shipped model protects meanwhile.
+- **Start-up:** the release agent carries an "administrator required" manifest (`backend/build.rs`) and also relaunches itself elevated if started without rights (`SOC_NO_ELEVATE=1` turns that off).
+- **Packages:** `.github/dependabot.yml` (weekly pull requests) and `.github/workflows/security.yml` (weekly npm / cargo / pip audit).

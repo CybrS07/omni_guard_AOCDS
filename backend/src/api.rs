@@ -1,8 +1,8 @@
 use axum::{
     extract::{Query, Request, State},
-    http::{header, HeaderValue, Method, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     middleware::{self, Next},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -77,6 +77,9 @@ pub fn router(st: Shared) -> Router {
         .route("/api/integrity/remove", post(integrity_remove))
         .route("/api/integrity/accept", post(integrity_accept))
         .route("/api/integrity/check", post(integrity_check))
+        .route("/api/apps/updates", get(apps_updates))
+        .route("/api/apps/refresh", post(apps_refresh))
+        .route("/api/apps/update", post(apps_update))
         .route("/api/software", get(software_list))
         .route("/api/software/rescan", post(software_rescan))
         .route("/api/registry", get(registry_view))
@@ -89,8 +92,10 @@ pub fn router(st: Shared) -> Router {
         .route("/api/registry/windows-point", post(registry_windows_point))
         .route("/api/registry/restore", post(registry_restore))
         .route("/api/registry/guard", post(registry_guard))
+        .route("/api/registry/open", post(registry_open))
         .route("/api/schedules", get(schedules_view))
         .route("/api/schedules/refresh", post(schedules_refresh))
+        .layer(middleware::from_fn(json_errors)) // inside the guard: turns plain-text rejections into JSON
         .layer(middleware::from_fn_with_state(st.clone(), guard))
         .layer(cors) // outermost so CORS preflights are answered before the guard runs
         .with_state(st)
@@ -121,6 +126,24 @@ async fn guard(State(st): State<Shared>, req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
+/// The web framework answers a request it cannot read (bad JSON, bad query) with a plain-text 400/415/422.
+/// The dashboard only understands JSON `{"error": "..."}`, so it would show "Request failed (400)" and nothing else.
+/// This wraps such a reply into the normal JSON shape so the real reason reaches the screen.
+async fn json_errors(req: Request, next: Next) -> Response {
+    let res = next.run(req).await;
+    let code = res.status();
+    let plain_error = matches!(code.as_u16(), 400 | 415 | 422)
+        && !res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("").contains("json");
+    if !plain_error {
+        return res;
+    }
+    let (_, body) = res.into_parts();
+    let bytes = axum::body::to_bytes(body, 4096).await.unwrap_or_default();
+    let text = String::from_utf8_lossy(&bytes).trim().to_string();
+    let text = if text.is_empty() { "the request could not be read".to_string() } else { text };
+    (code, Json(json!({ "error": text }))).into_response()
+}
+
 /// Self-describing endpoint list, so a human or an AI client can discover the API.
 async fn index() -> Json<Value> {
     Json(json!({
@@ -133,7 +156,7 @@ async fn index() -> Json<Value> {
             {"method": "GET",  "path": "/api/system",   "about": "host facts: OS, hardware, VM detection, accounts, disks, services"},
             {"method": "GET",  "path": "/api/metrics?points=120", "about": "live CPU/mem/GPU/temps/disks/network/apps + rolling history"},
             {"method": "GET",  "path": "/api/alerts?category=network,firewall", "about": "raised alerts, newest first"},
-            {"method": "GET",  "path": "/api/logs?kind=apps|access|permissions|alerts|all&limit=200&q=text", "about": "txt log lines, newest first (kinds include scan = face-scan service log)"},
+            {"method": "GET",  "path": "/api/logs?kind=apps|access|permissions|alerts|all&limit=200&q=text", "about": "txt log lines, newest first (kinds include scan = scan service log)"},
             {"method": "GET",  "path": "/api/events?log=System|Application|Security&limit=200&level=error,warning&id=4624,4625&q=text", "about": "full Windows event records: id, name, source, level, user, message and every data field"},
             {"method": "GET",  "path": "/api/firewall", "about": "firewall profiles and rules"},
             {"method": "POST", "path": "/api/firewall/rules", "about": "create rule {name,direction,action,protocol,local_port,remote_port,remote_ip,program}"},
@@ -142,6 +165,9 @@ async fn index() -> Json<Value> {
             {"method": "POST", "path": "/api/firewall/block-ip", "about": "{ip} blocks inbound+outbound"},
             {"method": "POST", "path": "/api/firewall/logging", "about": "enable dropped-packet logging"},
             {"method": "GET",  "path": "/api/downloads", "about": "files held in isolation + verdicts (VirusTotal / NVD)"},
+            {"method": "GET",  "path": "/api/apps/updates", "about": "programs that winget can update"},
+            {"method": "POST", "path": "/api/apps/refresh", "about": "ask winget again"},
+            {"method": "POST", "path": "/api/apps/update", "about": "update one program by winget id"},
             {"method": "GET",  "path": "/api/software", "about": "installed programs + known vulnerabilities (NVD)"},
             {"method": "POST", "path": "/api/software/rescan", "about": "check installed software again now"},
             {"method": "POST", "path": "/api/downloads/decision", "about": "{id, allow} keep or permanently remove a held download"},
@@ -503,17 +529,12 @@ async fn downloads_decide(State(st): State<Shared>, Json(b): Json<DecisionBody>)
 
 // ------------------------------------------------------------------ folder scan (hidden scripts / zip bombs)
 
-#[derive(Deserialize)]
-struct BrowseQ {
-    #[serde(default)]
-    path: String,
-    #[serde(default)]
-    files: bool,
-}
-
 /// Lists the folders (or files) at a given path so the user can choose what to scan.
-async fn filescan_browse(Query(q): Query<BrowseQ>) -> ApiResult {
-    let v = blocking(move || crate::filescan::browse(&q.path, q.files)).await?.map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+async fn filescan_browse(Query(q): Query<std::collections::HashMap<String, String>>) -> ApiResult {
+    // read the two values by hand, so an odd character in a folder name can never make the request unreadable
+    let path = q.get("path").cloned().unwrap_or_default();
+    let files = matches!(q.get("files").map(|v| v.trim().to_lowercase()).as_deref(), Some("1" | "true" | "yes" | "on"));
+    let v = blocking(move || crate::filescan::browse(&path, files)).await?.map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(v))
 }
 
@@ -535,7 +556,15 @@ fn yes() -> bool {
 }
 
 /// Starts a background scan of a folder, applying the extension and folder filters from the request.
-async fn filescan_start(State(st): State<Shared>, Json(b): Json<StartBody>) -> ApiResult {
+/// The name of the signed-in person, sent by the dashboard in X-Omni-User. Only letters, digits and . _ - @ are kept.
+/// It is written to the log next to what they did. (The dashboard is the only caller, so this is an audit label, not a login.)
+fn who(h: &HeaderMap) -> String {
+    let n: String = h.get("x-omni-user").and_then(|v| v.to_str().ok()).unwrap_or("").chars().filter(|c| c.is_alphanumeric() || "._-@".contains(*c)).take(40).collect();
+    if n.is_empty() { "unknown".into() } else { n }
+}
+
+async fn filescan_start(State(st): State<Shared>, h: HeaderMap, Json(b): Json<StartBody>) -> ApiResult {
+    st.log("scan", "INFO", format!("AUDIT user={} action=SCAN_FOLDER path={}", who(&h), b.path));
     let extensions = b.extensions.iter().map(|e| e.trim().trim_start_matches('*').trim_start_matches('.').to_lowercase()).filter(|e| !e.is_empty()).collect();
     let opts = crate::filescan::Opts { recursive: b.recursive, extensions, exclude: b.exclude };
     let id = crate::filescan::start(&st, &b.path, opts).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
@@ -624,7 +653,7 @@ async fn services_list(State(st): State<Shared>) -> Json<Value> {
         "services": crate::settings::list(),
         "external": [
             { "name": "agent", "label": "Agent (this service)", "about": "Collectors, firewall, API. To run it as a Windows service use: soc-agent install / start / stop / uninstall (Administrator).", "running": true },
-            { "name": "scan", "label": "Scan + AI service (Python)", "about": "Face scan, VirusTotal/NVD lookups, hidden-pixel decoding and the local int8 script classifier. Started and stopped together with the app.", "running": scan_up },
+            { "name": "scan", "label": "Scan + AI service (Python)", "about": "Accounts and sign-in, YARA, VirusTotal/NVD lookups, hidden-pixel decoding and the local int8 script classifier. Started and stopped together with the app.", "running": scan_up },
         ],
     }))
 }
@@ -660,29 +689,63 @@ struct PathBody {
 }
 
 /// Adds a file or folder to integrity watching so later changes to it are detected.
-async fn integrity_add(State(st): State<Shared>, Json(b): Json<PathBody>) -> ApiResult {
+async fn integrity_add(State(st): State<Shared>, h: HeaderMap, Json(b): Json<PathBody>) -> ApiResult {
+    st.log("apps", "INFO", format!("AUDIT user={} action=FIM_WATCH_ADD path={}", who(&h), b.path));
     st.integrity.add(&st, &b.path).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(json!({ "ok": true })))
 }
 
 /// Stops watching a path for integrity changes and reports whether it was removed.
-async fn integrity_remove(State(st): State<Shared>, Json(b): Json<PathBody>) -> ApiResult {
+async fn integrity_remove(State(st): State<Shared>, h: HeaderMap, Json(b): Json<PathBody>) -> ApiResult {
+    st.log("apps", "WARN", format!("AUDIT user={} action=FIM_WATCH_REMOVE path={}", who(&h), b.path));
     Ok(Json(json!({ "removed": st.integrity.remove(&st, &b.path) })))
 }
 
 /// Accepts the current state of a changed file as its new normal, so it stops being flagged.
-async fn integrity_accept(State(st): State<Shared>, Json(b): Json<PathBody>) -> ApiResult {
+async fn integrity_accept(State(st): State<Shared>, h: HeaderMap, Json(b): Json<PathBody>) -> ApiResult {
+    st.log("apps", "WARN", format!("AUDIT user={} action=FIM_ACCEPT_CHANGE path={}", who(&h), b.path));
     let s = st.clone();
     blocking(move || s.integrity.rebaseline(&s, &b.path)).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
 /// Runs a full integrity check on every watched file now and returns the results.
-async fn integrity_check(State(st): State<Shared>) -> ApiResult {
+async fn integrity_check(State(st): State<Shared>, h: HeaderMap) -> ApiResult {
+    st.log("apps", "INFO", format!("AUDIT user={} action=FIM_CHECK_NOW", who(&h)));
     st.integrity.request_full();
     let s = st.clone();
     blocking(move || s.integrity.check_all(&s, true)).await?;
     Ok(Json(json!({ "items": st.integrity.list() })))
+}
+
+// ------------------------------------------------------------------ update installed programs (winget)
+
+/// What winget says can be updated (the last result).
+async fn apps_updates() -> Json<Value> {
+    Json(json!(crate::appupdates::view()))
+}
+
+/// Ask winget again (takes a few seconds, runs in the background of the request).
+async fn apps_refresh(State(st): State<Shared>) -> ApiResult {
+    let s = st.clone();
+    blocking(move || crate::appupdates::refresh(&s)).await?;
+    Ok(Json(json!(crate::appupdates::view())))
+}
+
+#[derive(Deserialize)]
+struct AppIdBody {
+    id: String,
+}
+
+/// Update one program by its winget id.
+async fn apps_update(State(st): State<Shared>, h: HeaderMap, Json(b): Json<AppIdBody>) -> ApiResult {
+    need_admin(&st)?;
+    let (s, who) = (st.clone(), who(&h));
+    let r = blocking(move || crate::appupdates::update(&s, &b.id, &who)).await?;
+    match r {
+        Ok(m) => Ok(Json(json!({ "ok": true, "message": m, "view": crate::appupdates::view() }))),
+        Err(e) => Err(fail(StatusCode::BAD_REQUEST, e)),
+    }
 }
 
 // ------------------------------------------------------------------ installed software (NVD)
@@ -748,6 +811,14 @@ struct IdBody {
     id: String,
     #[serde(default)]
     on: bool,
+}
+
+/// Open Windows Registry Editor (regedit) already pointing at the key of one entry.
+async fn registry_open(State(st): State<Shared>, Json(b): Json<IdBody>) -> ApiResult {
+    let s = st.clone();
+    let id = b.id.clone();
+    let msg = blocking(move || s.registry.open_in_regedit(&id)).await?.map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(json!({ "ok": true, "message": msg })))
 }
 
 /// Delete one leftover (orphan) or unowned (malware) entry. A restore point is taken first.

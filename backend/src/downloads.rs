@@ -3,6 +3,7 @@
 //!
 //!   1. WATCH    new program/installer files appear in Downloads / Desktop      (this file)
 //!   2. ISOLATE  move the file into its own quarantine folder                   (isolation.rs)
+//!   (every downloaded file is captured, including Linux files; see SKIP_EXTS)
 //!   3. EXTRACT  name, version, SHA-256, publisher signature                    (fileinfo.rs)
 //!   4. ASK      send the details to Python for VirusTotal + NVD checks         (intel_client.rs)
 //!   5. DECIDE   clean / vulnerable -> release the file (vulnerable is also flagged)
@@ -23,12 +24,13 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-/// Programs, libraries, installers, scripts (Windows PowerShell / batch / Linux shell for WSL) and archives.
-const DEFAULT_EXTS: &[&str] = &[
-    "exe", "dll", "msi", "msix", "appx", "scr", "com", "lnk", "jar",
-    "ps1", "psm1", "bat", "cmd", "vbs", "js", "sh", "bash",
-    "zip", "7z", "rar", "tar", "gz", "tgz",
-];
+/// By default EVERY file that lands in a watched folder is captured and checked, whatever its name:
+/// Windows programs and installers, Linux programs (.sh, .deb, .rpm, .AppImage, .run, ELF files with no extension at all),
+/// scripts, Office / PDF files, disk images, archives. The agent finds out what a file really is from its first bytes, not from its name.
+/// Only files a browser is still writing, and Windows' own housekeeping files, are skipped.
+/// (If `download_extensions` is set in config.json, only those extensions are captured instead.)
+const SKIP_EXTS: &[&str] = &["crdownload", "part", "partial", "download", "opdownload", "tmp", "temp", "ini", "db", "lock", "swp"];
+const SKIP_NAMES: &[&str] = &["desktop.ini", "thumbs.db", ".ds_store"];
 
 /// "*.exe", "*exe", ".exe" and "EXE" all mean the extension `exe`.
 fn clean_ext(s: &str) -> String {
@@ -184,9 +186,18 @@ fn wsl_dirs() -> Vec<PathBuf> {
     out
 }
 
-/// Checks whether a file has one of the extensions we care about, ignoring letter case.
+/// Should this file be captured? With no extension list (the default): every file except unfinished downloads and housekeeping files.
+/// With a list from config.json: only those extensions, ignoring letter case.
 fn wanted(path: &Path, exts: &[String]) -> bool {
-    path.extension().map_or(false, |e| exts.iter().any(|x| e.to_string_lossy().eq_ignore_ascii_case(x)))
+    let name = path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if name.is_empty() || SKIP_NAMES.contains(&name.as_str()) || name.starts_with("~$") {
+        return false;
+    }
+    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase());
+    if exts.is_empty() {
+        return !ext.as_deref().map_or(false, |e| SKIP_EXTS.contains(&e));
+    }
+    ext.map_or(false, |e| exts.iter().any(|x| e.eq_ignore_ascii_case(x)))
 }
 
 /// Starts the download watcher thread, and asks again about any downloads that were waiting when the agent restarted.
@@ -213,7 +224,7 @@ pub fn spawn(st: Arc<AppState>) {
 
 /// Loop that checks the watched folders about every 2 seconds and starts processing files that have finished downloading.
 fn watch_loop(st: Arc<AppState>) {
-    let exts: Vec<String> = if st.cfg.download_extensions.is_empty() { DEFAULT_EXTS.iter().map(|s| s.to_string()).collect() } else { st.cfg.download_extensions.iter().map(|e| clean_ext(e)).filter(|e| !e.is_empty()).collect() };
+    let exts: Vec<String> = st.cfg.download_extensions.iter().map(|e| clean_ext(e)).filter(|e| !e.is_empty()).collect(); // empty = capture everything
     // path -> (size, modified, how many checks in a row it did not change)
     let mut pending: HashMap<PathBuf, (u64, Option<SystemTime>, u8)> = HashMap::new();
     let mut known: HashSet<PathBuf> = HashSet::new();
@@ -309,9 +320,24 @@ fn process(st: Arc<AppState>, path: PathBuf) {
     st.downloads.put(item.clone());
     st.log("apps", "INFO", format!("DOWNLOAD_ISOLATED {name} sha256={} version={} signed={} signer={:?}", info.sha256, info.version, info.signed, info.signer));
 
-    // 4. ASK Python
+    // 3b. LOOK INSIDE the isolated file: YARA, hidden scripts, programs hidden in other files, disguised names, hashes, signature.
+    // This works for Windows AND Linux files (ELF programs, shell scripts, .deb/.rpm contents are recognised by their bytes).
+    let mut py_state = 0u8;
+    let content = crate::filescan::scan_file(&st, &held, false, &mut py_state);
+
+    // 4. ASK Python (VirusTotal by hash + NVD). VirusTotal is the second opinion, after the content check above.
     match intel_client::analyze(&st.cfg.intel_url, &info) {
-        Ok(v) => item.verdict = Some(v),
+        Ok(mut v) => {
+            if content.verdict != "clean" {
+                let top: Vec<String> = content.findings.iter().take(3).map(|f| f.title.clone()).collect();
+                let old = v["summary"].as_str().unwrap_or("").to_string();
+                v["summary"] = format!("Content check ({}): {}. {}", content.kind, top.join("; "), old).into();
+                if content.verdict == "malicious" || v["verdict"] != "malware" {
+                    v["verdict"] = if content.verdict == "malicious" { "malware".into() } else if v["verdict"] == "clean" || v["verdict"] == "vulnerable" { "suspicious".into() } else { v["verdict"].clone() };
+                }
+            }
+            item.verdict = Some(v);
+        }
         Err(e) => {
             item.status = "awaiting_user".into();
             item.note = format!("Could not be checked ({e}). The file stays isolated until you decide.");

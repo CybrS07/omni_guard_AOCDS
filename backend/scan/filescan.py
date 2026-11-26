@@ -30,7 +30,10 @@ from pydantic import BaseModel, Field
 
 import aimodel
 import deobf
+import fileid
 import intel
+import pdfjs
+import yara_engine
 
 router = APIRouter(prefix="/api/filescan")
 
@@ -376,29 +379,110 @@ def archive_scan(path: str, ext: str, rust_findings: list[dict]) -> tuple[list[d
     return findings, hidden, stats
 
 
-def pdf_scan(path: str) -> tuple[list[dict], list[dict]]:
+PDF_HOWTO = (
+    "How to check this yourself (do not open the PDF in a PDF reader to test it):\n"
+    "1. pdfid.py file.pdf  (Didier Stevens, free, Python). Shows how many times /JS, /JavaScript, /OpenAction appear. "
+    "A count above 0 is only a marker, it does not prove a script exists.\n"
+    "2. pdf-parser.py --search javascript file.pdf  lists the objects that hold script. "
+    "pdf-parser.py -o {obj} -f file.pdf  prints that object decompressed. This is the real code.\n"
+    "3. qpdf --qdf --object-streams=disable file.pdf out.pdf  then open out.pdf in a text editor and search for /JS. "
+    "Compressed parts become readable text.\n"
+    "4. mutool show file.pdf {obj}  (MuPDF) prints one object. Object {obj} is the one named above."
+)
+
+# trigger texts that start by themselves, without the person clicking anything
+AUTO_TRIGGERS = ("runs when the PDF is opened", "document-level script", "runs on a document event")
+
+
+def pdf_scan(path: str) -> tuple[list[dict], list[dict], set[str]]:
+    """Open a PDF, extract the JavaScript it really contains and explain it.
+
+    Returns (findings, hidden items, ids of Rust findings that this deeper reading replaces).
+    Two different situations are kept apart on purpose:
+      * a script was found      -> shown in full under "Hidden scripts", with how it is started
+      * only the word is present -> a low 'marker only' finding that says so, with the counts
+    """
     findings: list[dict] = []
     hidden: list[dict] = []
-    try:
-        with open(path, "rb") as f:
-            raw = f.read(MAX_TEXT)
-    except Exception:
-        return findings, hidden
-    for m in re.finditer(rb"/JS\s*\(((?:\\.|[^\\)]){10,4000})\)", raw):
-        txt = m.group(1).decode("latin-1", "replace")
-        hidden.append(make_hidden("PDF JavaScript action", m.start(), len(txt), "script", txt))
-        findings += scan_text(txt, "PDF JavaScript")
-        break
-    for m in re.finditer(rb"/(?:URI|F)\s*\((https?://[^)]{4,300})\)", raw):
-        if re.match(rb"https?://\d{1,3}(\.\d{1,3}){3}", m.group(1)):
-            findings.append(finding("raw-url", "medium", "PDF links to a raw IP address", m.group(1).decode("latin-1")))
+    info = pdfjs.extract(path)
+    replaced = {"pdf-js", "pdf-launch", "pdf-embedded"} if info["parsed"] or info["scripts"] else set()
+    marks = info["markers"]
+
+    # 1) real scripts
+    for n, sc in enumerate(info["scripts"][:8], start=1):
+        label = f"PDF JavaScript #{n}" + (f", object {sc['object']}" if sc["object"] else "") + f" - {sc['trigger']}"
+        item = make_hidden(label, 0, len(sc["text"]), "script", sc["text"])
+        item["howto"] = PDF_HOWTO.replace("{obj}", sc["object"].split()[0] if sc["object"] else "N")
+        hidden.append(item)
+        findings += scan_text(sc["text"], "PDF JavaScript")
+    if info["scripts"]:
+        auto = [s for s in info["scripts"] if s["trigger"].startswith(AUTO_TRIGGERS)]
+        count = len(info["scripts"])
+        findings.append(finding(
+            "pdf-js-code", "high" if auto else "medium",
+            "PDF runs JavaScript automatically" if auto else "PDF contains JavaScript code",
+            f"{count} script(s) were extracted from the PDF and are shown under Hidden scripts. "
+            + (f"{len(auto)} start by themselves when the file is opened. " if auto else "They start only after a click or a form action. ")
+            + "Normal documents almost never need scripts; they are used to exploit readers and to download malware."))
+    elif sum(marks.get(k, 0) for k in ("JavaScript", "JS", "AA", "OpenAction")) > 0:
+        # words present, no code: the "header only" situation
+        seen = ", ".join(f"/{k} x{marks[k]}" for k in ("JavaScript", "JS", "OpenAction", "AA") if marks.get(k))
+        findings.append(finding(
+            "pdf-js-marker", "low", "PDF mentions JavaScript, but no script was found",
+            f"The raw file contains the words {seen}, but no JavaScript code could be extracted from it"
+            + (" (the file could not be fully read: " + info["error"] + ")" if info["error"] else "")
+            + ". These words alone are only a marker; forms, fonts and viewer settings use them too. "
+            "To confirm by hand: run  pdfid.py file.pdf  and  pdf-parser.py --search javascript file.pdf  (Didier Stevens), "
+            "or  qpdf --qdf --object-streams=disable file.pdf out.pdf  and search out.pdf for /JS."))
+
+    # 2) launches, embedded files, links
+    for cmd in info["launches"][:3]:
+        findings.append(finding("pdf-launch", "high", "PDF can launch programs (/Launch)", f"{cmd}. A /Launch action starts an external program when it is triggered."))
+    if info["embedded"]:
+        findings.append(finding("pdf-embedded", "medium", "PDF has embedded files", "Embedded: " + ", ".join(info["embedded"][:5]) + ". Embedded files can hide programs or documents inside the PDF."))
+    for uri in info["uris"][:50]:
+        if re.match(r"https?://\d{1,3}(\.\d{1,3}){3}", uri):
+            findings.append(finding("raw-url", "medium", "PDF links to a raw IP address", uri))
             break
-    return findings, hidden
+    if info["encrypted"]:
+        findings.append(finding("pdf-encrypted", "low", "PDF is encrypted", "Encrypted PDFs can hide their content from scanners; the empty password was tried."))
+    return findings, hidden, replaced
+
+
+# ---------------------------------------------------------------- YARA
+YARA_SEV = {"critical": "critical", "high": "high", "medium": "medium", "low": "low"}
+
+
+def yara_findings(matches: list[dict], where: str) -> list[dict]:
+    """Turn YARA matches into findings. `where` says what was scanned (the file, or a hidden payload)."""
+    out: list[dict] = []
+    for m in matches:
+        sev = YARA_SEV.get(m["severity"], "medium")
+        title = "YARA: " + m["rule"].replace("_", " ")
+        detail = m["description"] + f" (found in {where})."
+        out.append(finding("yara-" + m["rule"], sev, title, detail))
+    return out
+
+
+def yara_scan_hidden(hidden: list[dict]) -> list[dict]:
+    """Run YARA over every hidden text and every readable layer of it."""
+    out: list[dict] = []
+    for h in hidden:
+        where = h.get("where", "hidden data")
+        texts = []
+        if h.get("text"):
+            texts.append(h["text"])
+        for layer in (h.get("deobf") or {}).get("layers", []) if isinstance(h.get("deobf"), dict) else []:
+            if isinstance(layer, dict) and layer.get("text"):
+                texts.append(layer["text"])
+        for t in texts:
+            out += yara_findings(yara_engine.scan_bytes(t.encode("utf-8", "replace")), where)
+    return out
 
 
 @router.get("/ai")
 def ai_status():
-    f = aimodel.MODEL_FILE
+    f = aimodel.model_file()
     return {"available": f.exists(), "dtype": "int8", "size_kb": round(f.stat().st_size / 1024) if f.exists() else 0,
             "classes": aimodel.LABELS, "features": aimodel.FEATURES}
 
@@ -424,6 +508,17 @@ def _dedupe(items: list[dict]) -> list[dict]:
             seen.add(k)
             out.append(f)
     return out
+
+
+def _hint(ident: dict, vt, findings: list[dict]) -> str:
+    """One plain sentence that says how the clues agree (shown above the hashes)."""
+    sig, parts = ident["signature"], []
+    parts.append("YARA/script rules: " + ("matched" if any(f["id"].startswith("yara-") for f in findings) else "no match"))
+    parts.append("VirusTotal: " + ("not checked" if not vt else f"{vt['malicious']} engines flag it" if vt.get("known") else "never seen"))
+    parts.append("signature: " + (sig["status"] if sig["checked"] else "not checked"))
+    if ident["known_bad"]:
+        parts.append("local malware list: MATCH")
+    return " · ".join(parts)
 
 
 @router.post("/analyze")
@@ -473,14 +568,23 @@ def analyze(b: AnalyzeIn):
         if st.get("skipped"):
             notes.append(st["skipped"])
     if b.kind == "pdf" or ext == "pdf":
-        f, h = pdf_scan(str(p))
+        f, h, replaced = pdf_scan(str(p))
+        findings = [x for x in findings if x["id"] not in replaced]   # the exact reading replaces Rust's word counting
         findings += f
         hidden += h
+
+    # 4a) YARA: the file itself, then every hidden payload
+    findings += yara_findings(yara_engine.scan_file(str(p)), "the file")
+    findings += yara_scan_hidden(hidden)
 
     # 4b) read every obfuscated script again after its layers are removed
     findings += deobf_findings(hidden)
 
-    # 5) VirusTotal (hash only)
+    # 4c) fingerprints (MD5 / SHA-256), local known-bad list, digital signature
+    ident = fileid.identify(str(p))
+    findings += fileid.findings_from(ident, finding)
+
+    # 5) VirusTotal (hash only). It runs AFTER YARA and the hash/signature checks: it is the second opinion, and only a hash is sent.
     vt = None
     if b.allow_vt and b.sha256:
         k = intel.keys()["vt"]
@@ -497,4 +601,5 @@ def analyze(b: AnalyzeIn):
         else:
             notes.append("VirusTotal key not set (add VT_API_KEY to .env) - hash lookup skipped.")
 
-    return {"findings": _dedupe(findings), "hidden": hidden[:12], "vt": vt, "note": " ".join(dict.fromkeys(notes))}
+    ident["verdict_hint"] = _hint(ident, vt, findings)
+    return {"findings": _dedupe(findings), "hidden": hidden[:12], "vt": vt, "ident": ident, "note": " ".join(dict.fromkeys(notes))}

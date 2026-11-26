@@ -1,16 +1,17 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import Button from '../components/Button.jsx'
 import { ShieldPulse } from '../components/Loader.jsx'
-import { CamStage, useFaceCam } from './FaceCam.jsx'
-import { POSES, ScanError, scanApi } from './scanApi.js'
+import { ScanError, scanApi } from './scanApi.js'
 import './scan.css'
 
+// The signed-in session lives in sessionStorage: it is gone when the tab closes.
 const KEY = 'soc-scan-session'
 const ScanCtx = createContext({ user: null, role: null, token: null, lock: null })
 
-/** Who is signed in through the face scan (null when the gate is switched off). */
+/** Who is signed in: { user, role, token, lock }. All null when the gate is switched off. */
 export const useScan = () => useContext(ScanCtx)
 
+/** Read the remembered session (or null). */
 const readSession = () => {
   try {
     return JSON.parse(sessionStorage.getItem(KEY) || 'null')
@@ -18,19 +19,21 @@ const readSession = () => {
     return null
   }
 }
+
+/** Remember a session, or forget it when `s` is null. */
 const writeSession = (s) => {
   try {
     if (s) sessionStorage.setItem(KEY, JSON.stringify(s))
     else sessionStorage.removeItem(KEY)
   } catch {
-    /* storage blocked: the scan simply repeats after a reload */
+    /* storage blocked: the person simply signs in again after a reload */
   }
 }
 
 /**
- * Blocks the whole app until the person passes the face scan.
- * First run (no user yet): create the admin profile (5 captures). After that: password + face.
- * Set VITE_SCAN_GATE=off in frontend/.env.local to skip it (e.g. when the scan service is not installed).
+ * Blocks the whole app until the person signs in with a password.
+ * First run (no account yet): create the administrator. After that: the sign-in form.
+ * Set VITE_SCAN_GATE=off in frontend/.env.local to skip it (for example when the scan service is not running).
  */
 export default function ScanGate({ children }) {
   if (import.meta.env.VITE_SCAN_GATE === 'off') return children
@@ -40,15 +43,18 @@ export default function ScanGate({ children }) {
 function Gate({ children }) {
   const [session, setSession] = useState(readSession)
   const [verified, setVerified] = useState(false)
-  const [phase, setPhase] = useState('boot') // boot | enroll | login
+  const [phase, setPhase] = useState('boot') // boot | setup | login
   const [bootError, setBootError] = useState('')
-  const [faceRequired, setFaceRequired] = useState(false)
+  const [report, setReport] = useState(null) // what the services printed (development only)
 
+  // A person signed in: keep the session and open the app.
   const open = useCallback((s) => {
     writeSession(s)
     setSession(s)
     setVerified(true)
   }, [])
+
+  // Sign out: forget the session and start again from the boot check.
   const lock = useCallback(() => {
     writeSession(null)
     setSession(null)
@@ -56,7 +62,7 @@ function Gate({ children }) {
     setPhase('boot')
   }, [])
 
-  // Decide what to show: resume a remembered session, or ask the service whether anyone is enrolled.
+  // Decide what to show: resume a remembered session, or ask the service whether any account exists.
   useEffect(() => {
     if (verified || phase !== 'boot') return undefined
     let alive = true
@@ -71,20 +77,21 @@ function Gate({ children }) {
             return
           } catch (e) {
             if (e.status !== 401) throw e
-            writeSession(null) // service restarted or session expired
+            writeSession(null) // the service restarted or the session expired
             if (alive) setSession(null)
           }
         }
         const st = await scanApi('/status')
         if (alive) {
           setBootError('')
-          setFaceRequired(!!st.face_required)
-          setPhase(st.enrolled ? 'login' : 'enroll')
+          setPhase(st.enrolled ? 'login' : 'setup')
         }
       } catch (e) {
         if (alive) {
           setBootError(e.message)
-          timer = setTimeout(run, 2500) // the service may still be loading its models
+          // development: ask the dev server what the scan service printed, to show the real reason
+          fetch('/__services').then((r) => (r.ok ? r.json() : null)).then((d) => alive && setReport(d)).catch(() => {})
+          timer = setTimeout(run, 2500) // the service may still be starting
         }
       }
     }
@@ -105,50 +112,39 @@ function Gate({ children }) {
         <div className="scan-card center">
           <ShieldPulse size={110} />
           <h1>OMNI GUARD AOCDS</h1>
-          <p className="muted">{bootError ? 'Waiting for the scan service…' : 'Starting security scan…'}</p>
-          {bootError && <p className="hint">{bootError} It is started by <code>npm run dev</code>; the first start downloads the face models.</p>}
+          <p className="muted">{bootError ? 'Waiting for the scan service…' : 'Starting…'}</p>
+          {bootError && <p className="hint">{bootError} The scan service is still starting. If this stays here, the reason is shown below.</p>}
+          {report?.scan?.state === 'failed' && <p className="form-error">The scan service stopped. Its last lines (the full log is in C:\ProgramData\SocMonitor\logs\scan-service.log):</p>}
+          {report?.scan?.state === 'failed' && <pre className="hint" style={{ textAlign: 'left', maxHeight: 180, overflow: 'auto' }}>{report.scan.lines.join('\n')}</pre>}
         </div>
       )}
-      {phase === 'enroll' && <Enroll onDone={open} />}
-      {phase === 'login' && <Login onDone={open} faceRequired={faceRequired} />}
+      {phase === 'setup' && <AccountForm title="First-time setup" text="Create the first account." path="/enroll" button="Create account" onDone={open} />}
+      {phase === 'login' && <AccountForm title="Sign in" text="Enter your username and password." path="/login" button="Sign in" onDone={open} />}
     </div>
   )
 }
 
-// ------------------------------------------------------------------ login
-
-function Login({ onDone, faceRequired }) {
-  // Password is the normal way in. The camera is the second option (or mandatory when the admin turned that on).
-  const [useFace, setUseFace] = useState(faceRequired)
-  const { videoRef, overlayRef, cam, faceOk, grab } = useFaceCam(useFace)
+/**
+ * One small form used for both first-time setup and sign-in.
+ * `path` is the scan service endpoint (/enroll or /login); both answer with { ok, message, session }.
+ */
+function AccountForm({ title, text, path, button, onDone }) {
   const [f, setF] = useState({ username: '', password: '' })
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
+  const isSetup = path === '/enroll'
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }))
-  useEffect(() => { if (faceRequired) setUseFace(true) }, [faceRequired])
 
   const submit = async (e) => {
     e.preventDefault()
-    if (useFace && !faceOk) return setMsg('Position your face in front of the camera first.')
     setBusy(true)
     setMsg('')
     try {
-      const images = []
-      if (useFace) {
-        for (let i = 0; i < 4; i++) {
-          const img = grab()
-          if (img) images.push(img)
-          await new Promise((r) => setTimeout(r, 250))
-        }
-      }
-      const r = await scanApi('/login', { method: 'POST', body: { ...f, images } })
+      const r = await scanApi(path, { method: 'POST', body: f })
       if (r.ok) onDone(r.session)
-      else {
-        if (r.code === 'face_required') setUseFace(true)
-        setMsg(r.message)
-      }
+      else setMsg(r.message)
     } catch (ex) {
-      setMsg(ex instanceof ScanError ? ex.message : 'Sign-in failed.')
+      setMsg(ex instanceof ScanError ? ex.message : 'Could not complete this. Try again.')
     } finally {
       setBusy(false)
     }
@@ -156,94 +152,18 @@ function Login({ onDone, faceRequired }) {
 
   return (
     <form className="scan-card" onSubmit={submit}>
-      <h1>Sign in</h1>
-      <p className="muted">{useFace ? 'Enter your password and look at the camera.' : 'Enter your username and password.'}</p>
-      {useFace && (
-        <>
-          <CamStage cam={cam} videoRef={videoRef} overlayRef={overlayRef} ok={faceOk} />
-          <div className={`cam-hint ${faceOk ? 'ok' : ''}`}>{faceOk ? 'Face detected' : 'No face detected yet'}</div>
-        </>
-      )}
+      <h1>{title}</h1>
+      <p className="muted">{text}</p>
       <div className="field">
         <label htmlFor="s-user">Username</label>
-        <input id="s-user" className="input" autoFocus autoComplete="username" required value={f.username} onChange={set('username')} />
+        <input id="s-user" className="input" autoFocus required autoComplete="username" placeholder={isSetup ? '2-32 letters, numbers, - _' : ''} value={f.username} onChange={set('username')} />
       </div>
       <div className="field">
         <label htmlFor="s-pass">Password</label>
-        <input id="s-pass" className="input" type="password" autoComplete="current-password" required value={f.password} onChange={set('password')} />
+        <input id="s-pass" className="input" type="password" required minLength={isSetup ? 4 : undefined} autoComplete={isSetup ? 'new-password' : 'current-password'} value={f.password} onChange={set('password')} />
       </div>
       {msg && <div className="form-error" role="alert">{msg}</div>}
-      <Button type="submit" variant="primary" busy={busy} disabled={useFace && cam.status !== 'ready'}>{useFace ? 'Verify face & sign in' : 'Sign in'}</Button>
-      {!faceRequired && (
-        <Button type="button" variant="outline" onClick={() => setUseFace((v) => !v)}>{useFace ? 'Use password only' : 'Also verify with face scan'}</Button>
-      )}
-    </form>
-  )
-}
-
-// ------------------------------------------------------------------ first run
-
-function Enroll({ onDone }) {
-  const { videoRef, overlayRef, cam, faceOk, grab } = useFaceCam(true)
-  const [f, setF] = useState({ username: '', password: '' })
-  const [shots, setShots] = useState([]) // {pose, image}
-  const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState('')
-  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }))
-  const next = POSES[shots.length]
-
-  const capture = () => {
-    const image = grab()
-    if (image && next) setShots((s) => [...s, { pose: next.id, image }])
-  }
-
-  const submit = async (e) => {
-    e.preventDefault()
-    setBusy(true)
-    setMsg('')
-    try {
-      const r = await scanApi('/enroll', { method: 'POST', body: { ...f, samples: shots } })
-      if (r.ok) onDone(r.session)
-      else {
-        setMsg(r.message)
-        if (r.code === 'few_samples') setShots([])
-      }
-    } catch (ex) {
-      setMsg(ex instanceof ScanError ? ex.message : 'Setup failed.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <form className="scan-card" onSubmit={submit}>
-      <h1>First-time setup</h1>
-      <p className="muted">Create the administrator and record your face ({POSES.length} quick captures).</p>
-      <CamStage cam={cam} videoRef={videoRef} overlayRef={overlayRef} ok={faceOk} />
-      {next ? (
-        <div className="pose-row">
-          <div><b>{shots.length + 1} / {POSES.length}</b> {next.label}</div>
-          <Button type="button" variant="primary" size="sm" disabled={!faceOk} onClick={capture}>Capture</Button>
-        </div>
-      ) : (
-        <div className="cam-hint ok">All captures done</div>
-      )}
-      <div className="thumbs">
-        {shots.map((s) => <img key={s.pose} src={s.image} alt={s.pose} title={s.pose} />)}
-        {shots.length > 0 && <button type="button" className="tab" onClick={() => setShots((x) => x.slice(0, -1))}>Retake last</button>}
-      </div>
-      <div className="form-grid">
-        <div className="field">
-          <label htmlFor="e-user">Username</label>
-          <input id="e-user" className="input" required autoComplete="username" placeholder="2-32 letters, numbers, - _" value={f.username} onChange={set('username')} />
-        </div>
-        <div className="field">
-          <label htmlFor="e-pass">Password</label>
-          <input id="e-pass" className="input" type="password" required minLength={4} autoComplete="new-password" value={f.password} onChange={set('password')} />
-        </div>
-      </div>
-      {msg && <div className="form-error" role="alert">{msg}</div>}
-      <Button type="submit" variant="primary" busy={busy} disabled={shots.length < POSES.length}>Create administrator</Button>
+      <Button type="submit" variant="primary" busy={busy}>{button}</Button>
     </form>
   )
 }

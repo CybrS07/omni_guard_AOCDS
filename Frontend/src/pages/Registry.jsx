@@ -13,8 +13,9 @@ import SetupForm from '../components/registry/SetupForm.jsx'
 /**
  * Registry guard page.
  *   Needs attention  -> malware (no owner), cannot-tell, and leftovers of removed software
- *   Map              -> every app with all the registry entries that belong to it, linked together
- *   Changes          -> who changed what (the program name) and what the guard did about it
+ *   Map list         -> every app with all the registry entries that belong to it, linked together
+ *   Changes          -> every change: startup keys with the program that made them, and the rest of the registry
+ *                       (HKLM and HKU, root to last sub key) found by the full registry check
  *   All entries      -> everything the guard read
  *   Restore points   -> the copies taken every few minutes
  *   Settings         -> the setup form again
@@ -84,7 +85,7 @@ export default function Registry() {
         <Tabs defaultValue="attention">
           <Tabs.List mb="md">
             <Tabs.Tab value="attention">Needs attention ({attention.length})</Tabs.Tab>
-            <Tabs.Tab value="map">Map ({(data.map || []).length})</Tabs.Tab>
+            <Tabs.Tab value="map">Map list ({(data.map || []).length})</Tabs.Tab>
             <Tabs.Tab value="changes">Changes ({(data.changes || []).length})</Tabs.Tab>
             <Tabs.Tab value="all">All entries ({entries.length})</Tabs.Tab>
             <Tabs.Tab value="points">Restore points ({data.points.length})</Tabs.Tab>

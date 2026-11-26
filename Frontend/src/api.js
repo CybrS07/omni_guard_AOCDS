@@ -7,12 +7,21 @@ export class ApiError extends Error {
   }
 }
 
+/** Name of the person signed in (set by the sign-in screen). It is sent with every call, so the agent can write WHO did it. */
+function signedInUser() {
+  try {
+    return JSON.parse(sessionStorage.getItem('soc-scan-session') || 'null')?.user || ''
+  } catch {
+    return ''
+  }
+}
+
 export async function api(path, { method = 'GET', body } = {}) {
   let res
   try {
     res = await fetch(`/api${path}`, {
       method,
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), 'X-Omni-User': signedInUser() },
       body: body ? JSON.stringify(body) : undefined,
     })
   } catch {
@@ -28,7 +37,7 @@ export async function api(path, { method = 'GET', body } = {}) {
     const msg =
       res.status === 502 || res.status === 504
         ? 'The agent is not responding yet. Start it with "npm run dev".'
-        : data?.error || `Request failed (${res.status})`
+        : data?.error || `Request failed (${res.status}) at /api${path.split('?')[0]}`
     throw new ApiError(msg, res.status)
   }
   return data

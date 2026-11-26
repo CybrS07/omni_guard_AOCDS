@@ -108,6 +108,23 @@ pub fn detect_admin() -> bool {
     }
 }
 
+/// Start this same program again with the Windows "Run as administrator" question, then the caller exits.
+/// Used when the agent was started without rights (for example by double-click or from a normal terminal).
+/// Returns false when the new process could not be started (the person pressed "No").
+pub fn relaunch_as_admin() -> bool {
+    if !cfg!(windows) {
+        return false;
+    }
+    let Ok(exe) = std::env::current_exe() else { return false };
+    let quote = |s: &str| format!("'{}'", s.replace('\'', "''"));
+    let args: Vec<String> = std::env::args().skip(1).map(|a| quote(&a)).collect();
+    let mut script = format!("Start-Process -FilePath {} -Verb RunAs -WindowStyle Hidden", quote(&exe.to_string_lossy()));
+    if !args.is_empty() {
+        script.push_str(&format!(" -ArgumentList {}", args.join(",")));
+    }
+    run("powershell", &["-NoProfile", "-NonInteractive", "-Command", &script], 60).map(|o| o.ok).unwrap_or(false)
+}
+
 /// Compare two strings in the same time whatever their contents, so attackers cannot guess a secret letter by letter.
 pub fn ct_eq(a: &str, b: &str) -> bool {
     if a.len() != b.len() {

@@ -39,7 +39,7 @@ function proxy(req, res, { port, rewrite, headers }) {
 }
 
 /** @returns {Promise<{server: import('http').Server, port: number}>} */
-function createServer({ uiDir, key, agentPort, scanPort, tokenFiles = [] }) {
+function createServer({ uiDir, key, agentPort, scanPort, getReport = () => ({}), tokenFiles = [] }) {
   const server = http.createServer((req, res) => {
     const host = (req.headers.host || '').split(':')[0]
     if (host !== '127.0.0.1' || req.headers['x-app-key'] !== key) {
@@ -47,6 +47,11 @@ function createServer({ uiDir, key, agentPort, scanPort, tokenFiles = [] }) {
       return res.end('forbidden')
     }
     const url = req.url || '/'
+    // what the background programs printed (so the window can show why the scan service is not answering)
+    if (url === '/__services') {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      return res.end(JSON.stringify(getReport()))
+    }
     if (url.startsWith('/scan-api/')) return proxy(req, res, { port: scanPort, rewrite: (u) => u.replace(/^\/scan-api/, '/api'), headers: { 'x-soc-token': readToken(tokenFiles) } })
     if (url.startsWith('/api/') || url === '/api') {
       return proxy(req, res, { port: agentPort, rewrite: (u) => u, headers: { 'x-soc-token': readToken(tokenFiles) } })

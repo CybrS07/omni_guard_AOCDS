@@ -1,6 +1,6 @@
 /**
- * Client for the Python face-scan service (scan/Python, FastAPI on 127.0.0.1:8000).
- * Vite proxies /scan-api/* -> http://127.0.0.1:8000/api/* (see vite.config.js).
+ * Client for the Python scan service (accounts, YARA, AI model, Git sync). Runs on a hidden local port.
+ * Vite proxies /scan-api/* -> the scan service's /api/* (see vite.config.js).
  */
 export class ScanError extends Error {
   constructor(message, status) {
@@ -32,11 +32,3 @@ export async function scanApi(path, { method = 'GET', body, token } = {}) {
   }
   return data
 }
-
-export const POSES = [
-  { id: 'straight', label: 'Look straight at the camera' },
-  { id: 'left', label: 'Turn your head slightly left' },
-  { id: 'right', label: 'Turn your head slightly right' },
-  { id: 'up', label: 'Tilt your chin up a little' },
-  { id: 'smile', label: 'Smile' },
-]

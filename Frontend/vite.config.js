@@ -65,10 +65,23 @@ const portBusy = (port) =>
     s.once('error', () => resolve(false))
   })
 
+/** Wait (up to `seconds`) until something answers on a local port. Used only to print "ready" lines. */
+async function waitForPort(port, seconds) {
+  const until = Date.now() + seconds * 1000
+  while (Date.now() < until) {
+    if (await portBusy(port)) return true
+    await new Promise((r) => setTimeout(r, 1500))
+  }
+  return false
+}
+
 /**
  * `npm run dev` (= this dev server) also starts the Rust agent and the Python scan service,
  * and stops them when it stops. A service that is already running (e.g. the installed Windows
  * service) is left alone. `npm run ui` (vite --mode ui) starts only the page.
+ *
+ * All three programs share ONE data folder (backend/data in development). That is what keeps the
+ * secret token, the hidden ports and the logs identical for everybody, so no request is turned away.
  */
 function services() {
   return {
@@ -77,17 +90,58 @@ function services() {
     async configureServer(server) {
       if (server.config.mode === 'ui') return
       const kids = []
-      const start = async (name, port, cmd, args, cwd, env = {}) => {
-        if (await portBusy(port)) return console.log(`[${name}] already running on :${port}, not starting another`)
-        console.log(`[${name}] starting: ${cmd} ${args.join(' ')}`)
-        const p = spawn(cmd, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32', env: { ...process.env, ...env } })
-        p.on('error', (e) => console.error(`[${name}] could not start (${e.message}). Is ${cmd} installed?`))
-        kids.push(p)
-      }
-      await start('agent', ports.agent, 'cargo', ['run'], path.join(root, 'backend'), { SOC_PORT: String(ports.agent), SOC_SCAN_PORT: String(ports.scan) })
-      await start('scan', ports.scan, 'uv', ['run', 'uvicorn', 'server:app', '--host', '127.0.0.1', '--port', String(ports.scan)], path.join(root, 'backend', 'scan'), {
-        SOC_TOKEN_FILE: path.join(dataDir(), 'api-token.txt'),
+      const folder = dataDir()
+      const common = { SOC_DATA_DIR: folder, SOC_PORT: String(ports.agent), SOC_SCAN_PORT: String(ports.scan) }
+
+      // The last lines each program printed, so the dashboard can show WHY a service is not answering.
+      const report = { agent: { state: 'starting', lines: [] }, scan: { state: 'starting', lines: [] } }
+      server.middlewares.use('/__services', (_req, res) => {
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify(report))
       })
+
+      // start one program, unless something already listens on its port
+      const start = async (name, port, cmd, args, cwd, env = {}) => {
+        if (await portBusy(port)) {
+          report[name].state = 'running'
+          console.log(`[${name}] already running on :${port}, not starting another`)
+          return
+        }
+        console.log(`[${name}] starting: ${cmd} ${args.join(' ')}`)
+        const p = spawn(cmd, args, { cwd, shell: process.platform === 'win32', env: { ...process.env, ...common, ...env } })
+        // show everything in this window AND keep the last 25 lines for the dashboard
+        const keep = (stream, out) =>
+          stream.on('data', (chunk) => {
+            out.write(chunk)
+            report[name].lines.push(...String(chunk).split(/\r?\n/).filter(Boolean))
+            report[name].lines = report[name].lines.slice(-25)
+          })
+        keep(p.stdout, process.stdout)
+        keep(p.stderr, process.stderr)
+        p.on('error', (e) => {
+          report[name].state = 'failed'
+          report[name].lines.push(`could not start: ${e.message}. Is ${cmd} installed?`)
+          console.error(`[${name}] could not start (${e.message}). Is ${cmd} installed?`)
+        })
+        p.on('exit', (code) => {
+          report[name].state = code ? 'failed' : 'stopped'
+          if (code) console.error(`[${name}] stopped with code ${code}. Scroll up for the reason.`)
+        })
+        kids.push(p)
+        // tell the person when it is really up (the first cargo build can take several minutes)
+        waitForPort(port, 900).then((up) => {
+          if (up) report[name].state = 'running'
+          console.log(up ? `[${name}] ready on :${port}` : `[${name}] did not open :${port} in 15 minutes`)
+        })
+      }
+
+      await start('agent', ports.agent, 'cargo', ['run'], path.join(root, 'backend'))
+      await start('scan', ports.scan, 'uv', ['run', 'uvicorn', 'server:app', '--host', '127.0.0.1', '--port', String(ports.scan)], path.join(root, 'backend', 'scan'), {
+        SOC_TOKEN_FILE: path.join(folder, 'api-token.txt'),
+        SOC_SCAN_DATA: path.join(folder, 'scan'),
+        SOC_LOG_DIR: path.join(folder, 'logs'),
+      })
+
       const stop = () => {
         for (const k of kids.splice(0)) {
           if (!k.pid) continue
@@ -123,8 +177,18 @@ function readToken() {
   return ''
 }
 
+/** While a service is still starting, answer 503 "starting" instead of a raw connection error. */
+function whileStarting(proxy) {
+  proxy.on('error', (_err, _req, res) => {
+    if (res && !res.headersSent && typeof res.writeHead === 'function') {
+      res.writeHead(503, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ detail: 'The service is still starting.' }))
+    }
+  })
+}
+
 const agent = process.env.SOC_AGENT_URL || `http://127.0.0.1:${ports.agent}`
-// Python face-scan service (scan/Python, started by `npm run dev`)
+// Python scan service (backend/scan, started by `npm run dev`)
 const scan = process.env.SOC_SCAN_URL || `http://127.0.0.1:${ports.scan}`
 
 export default defineConfig({
@@ -138,6 +202,7 @@ export default defineConfig({
         target: scan,
         rewrite: (p) => p.replace(/^\/scan-api/, '/api'),
         configure: (proxy) => {
+          whileStarting(proxy)
           proxy.on('proxyReq', (proxyReq) => {
             proxyReq.setHeader('X-SOC-Token', readToken())
           })
@@ -147,6 +212,7 @@ export default defineConfig({
         target: agent,
         changeOrigin: true, // makes the Host header 127.0.0.1:<port>, which the agent requires
         configure: (proxy) => {
+          whileStarting(proxy)
           proxy.on('proxyReq', (proxyReq) => {
             proxyReq.setHeader('X-SOC-Token', readToken())
           })

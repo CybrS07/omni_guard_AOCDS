@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "electron . --dev",
     "start": "electron .",
-    "dist": "electron-builder --win --x64"
+    "dist": "electron-builder --win nsis --x64",
+    "dist:exe": "electron-builder --win portable --x64"
   },
   "devDependencies": {
     "electron": "^33.0.0",
@@ -51,6 +52,10 @@
         "nsis"
       ],
       "requestedExecutionLevel": "requireAdministrator"
+    },
+    "portable": {
+      "artifactName": "OmniGuard-AOCDS-${version}-portable.exe",
+      "requestExecutionLevel": "admin"
     },
     "nsis": {
       "oneClick": false,

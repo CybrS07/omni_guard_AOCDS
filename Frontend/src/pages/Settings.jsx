@@ -6,10 +6,12 @@ import KeysForm from '../components/KeysForm.jsx'
 import { Bars } from '../components/Loader.jsx'
 import NvdNotice from '../components/NvdNotice.jsx'
 import Accounts from '../components/settings/Accounts.jsx'
-import FaceLevel from '../components/settings/FaceLevel.jsx'
 import Folders from '../components/settings/Folders.jsx'
 import Integrity from '../components/settings/Integrity.jsx'
+import ModelTraining from '../components/settings/ModelTraining.jsx'
 import Services from '../components/settings/Services.jsx'
+import AppUpdates from '../components/settings/AppUpdates.jsx'
+import Updates from '../components/settings/Updates.jsx'
 import { scanApi } from '../scan/scanApi.js'
 import ThemeToggle from '../theme/ThemeToggle.jsx'
 
@@ -79,13 +81,16 @@ export default function Settings({ status }) {
         <div id="folders"><Folders /></div>
         <div id="integrity"><Integrity /></div>
         <Accounts />
-        <FaceLevel />
+        <Updates />
+        <AppUpdates />
+        <ModelTraining />
         <div id="keys"><KeysForm /></div>
 
         <div className="panel">
           <div className="panel-head"><h2><Icon name="server" size={20} /> About this agent</h2></div>
           <dl style={{ margin: 0 }}>
             <Row k="Version">Omni Guard AOCDS agent v{status.version}</Row>
+            <Row k="License">Based on Omni Guard AOCDS by the Omni Guard AOCDS authors. Free to use and modify with credit; no warranty (see LICENSE).</Row>
             <Row k="Privileges"><span className={`pill flat ${status.admin ? 'ok' : 'warn'}`}>{status.admin ? 'Elevated (administrator)' : 'Not elevated'}</span></Row>
             <Row k="Log folder"><span className="mono">{status.log_dir}</span></Row>
             <Row k="Watched folders">{dl ? (dl.watching?.length ? dl.watching.map((w) => <div key={w} className="mono">{w}</div>) : '-') : <Bars />}</Row>

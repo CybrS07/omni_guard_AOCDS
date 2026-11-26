@@ -111,14 +111,25 @@ impl Config {
                 match serde_json::from_str::<Config>(&text) {
                     Ok(cfg) => {
                         println!("[config] loaded {}", path.display());
-                        return cfg;
+                        return cfg.with_env_overrides();
                     }
                     Err(e) => eprintln!("[config] {} is invalid ({e}); trying next", path.display()),
                 }
             }
         }
         println!("[config] using built-in defaults");
-        Config::default()
+        Config::default().with_env_overrides()
+    }
+
+    /// SOC_DATA_DIR moves every data file (token, ports, logs, isolation, registry backups) to one folder.
+    /// `npm run dev` sets it so the agent, the scan service and the dashboard all look in the same place.
+    fn with_env_overrides(mut self) -> Config {
+        if let Ok(dir) = std::env::var("SOC_DATA_DIR") {
+            if !dir.trim().is_empty() {
+                self.data_dir = dir;
+            }
+        }
+        self
     }
 }
 

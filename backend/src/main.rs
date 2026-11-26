@@ -17,6 +17,8 @@ mod logs;
 mod netwatch;
 mod ports;
 mod registry;
+mod appupdates;
+mod regtree;
 mod regwatch;
 mod schedules;
 #[cfg(windows)]
@@ -52,6 +54,16 @@ fn main() {
             eprintln!("--service is only available on Windows");
             return;
         }
+    }
+
+    // Windows: never run half-powered. Without administrator rights, ask Windows for them and start again elevated.
+    // (set SOC_NO_ELEVATE=1 to skip this, e.g. for `npm run dev:noadmin`)
+    if cfg!(windows) && std::env::var_os("SOC_NO_ELEVATE").is_none() && !util::detect_admin() {
+        eprintln!("[agent] needs administrator rights, asking Windows ...");
+        if util::relaunch_as_admin() {
+            return;
+        }
+        eprintln!("[agent] administrator rights were not given; running with limited features");
     }
 
     // install / uninstall / start / stop / status / version

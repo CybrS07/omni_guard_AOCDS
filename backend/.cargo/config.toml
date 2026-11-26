@@ -1,0 +1,4 @@
+# Link the Microsoft C runtime INTO soc-agent.exe, so it runs on a clean Windows PC that has no
+# "Visual C++ Redistributable" installed. (Only affects Windows builds.)
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

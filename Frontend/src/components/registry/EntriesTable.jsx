@@ -3,6 +3,7 @@ import { Fragment, useState } from 'react'
 import { api } from '../../api.js'
 import Button from '../Button.jsx'
 import { Confirm, useToast } from '../Feedback.jsx'
+import HowToFind from './HowToFind.jsx'
 
 // How each verdict looks. The words are plain on purpose.
 const VERDICTS = {
@@ -32,6 +33,7 @@ export default function EntriesTable({ rows, onChanged }) {
   const toast = useToast()
   const [open, setOpen] = useState(null) // which row shows its details
   const [ask, setAsk] = useState(null) // the entry we are about to delete
+  const [find, setFind] = useState(null) // the entry whose "how to find it yourself" window is open
   const [busy, setBusy] = useState(false)
 
   // Call the agent, show the answer, reload the page data.
@@ -63,7 +65,7 @@ export default function EntriesTable({ rows, onChanged }) {
               <th>Entry</th>
               <th>Type</th>
               <th>Belongs to</th>
-              <th style={{ width: 230 }}>Actions</th>
+              <th style={{ width: 300 }}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -81,6 +83,7 @@ export default function EntriesTable({ rows, onChanged }) {
                     <td>{e.owner || '-'}</td>
                     <td onClick={(ev) => ev.stopPropagation()}>
                       <div className="toolbar">
+                        <Button size="sm" onClick={() => setFind(e)}>Find it</Button>
                         {e.can_delete && (
                           <Button size="sm" tone="danger" onClick={() => setAsk(e)}>
                             {e.verdict === 'orphan' ? 'Delete leftover' : 'Delete'}
@@ -117,6 +120,8 @@ export default function EntriesTable({ rows, onChanged }) {
           </tbody>
         </table>
       </div>
+
+      <HowToFind entry={find} onClose={() => setFind(null)} />
 
       {ask && (
         <Confirm

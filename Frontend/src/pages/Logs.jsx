@@ -13,7 +13,7 @@ const TABS = [
   { id: 'access', label: 'System access', file: 'access.txt' },
   { id: 'permissions', label: 'Permission changes', file: 'permissions.txt' },
   { id: 'alerts', label: 'Alerts', file: 'alerts.txt' },
-  { id: 'scan', label: 'Face scan', file: 'scan.txt' },
+  { id: 'scan', label: 'Scan service', file: 'scan.txt' },
   { id: 'schedules', label: 'Schedules', file: 'schedules.txt' },
   { id: 'events', label: 'Windows events', file: null },
 ]
@@ -38,7 +38,7 @@ export default function Logs() {
       <div className="page-head">
         <div>
           <h1>Logs</h1>
-          <p>{isEvents ? 'Windows Event Log records with full details' : isSchedules ? 'Scheduled tasks that start by themselves, fetched automatically' : 'Plain-text records written by the agent and the face-scan service'}{file ? <> · <span className="mono">{file}</span></> : ''}</p>
+          <p>{isEvents ? 'Windows Event Log records with full details' : isSchedules ? 'Scheduled tasks that start by themselves, fetched automatically' : 'Plain-text records written by the agent and the scan service'}{file ? <> · <span className="mono">{file}</span></> : ''}</p>
         </div>
         {!isTable && (
           <div className="toolbar">

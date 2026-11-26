@@ -1,0 +1,37 @@
+Omni Guard AOCDS License
+Copyright (c) 2026 The Omni Guard AOCDS authors
+
+Permission is granted, free of charge, to anyone who obtains a copy of this software and its documentation
+(the "Software") to use it, copy it, modify it, merge it, publish it, distribute it and sell copies of it,
+for any purpose, under these conditions:
+
+1. CREDIT. Every copy and every modified version must keep this license text and the copyright line above, and
+   must say, in a place users can see (for example the README and the About / Settings screen):
+   "Based on Omni Guard AOCDS by the Omni Guard AOCDS authors."
+   If you change the Software, you must also say that it was changed and by whom. You may add your own
+   copyright line for your changes, but you may not remove or hide the original credit.
+
+2. NO NAME FOR YOUR CHANGES. A modified version must not be presented as the original or as approved by the
+   original authors.
+
+3. NO WARRANTY. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+   BUT NOT LIMITED TO MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, ACCURACY OF DETECTION AND
+   NON-INFRINGEMENT. It is a student / learning project. It can miss malware, it can call harmless files
+   dangerous, and it is not a replacement for a professional, certified security product.
+
+4. NO LIABILITY. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR
+   ITS USE. This includes, without limit: lost or damaged files, blocked or deleted programs, firewall or registry
+   changes made by the Software, missed attacks, and any harm caused by a malicious or faulty update.
+
+5. MODIFIED AND PARTLY UPDATED COPIES. The authors are not responsible for any copy that has been modified,
+   built from an incomplete or half-applied update, or obtained from anywhere except the authors' own
+   repository. This includes any backdoor, malware, data theft or other harmful behaviour that a modified or
+   third-party copy contains, and any problem caused by running a copy that was only partly updated. Whoever
+   modifies or redistributes the Software is responsible for what their version does.
+
+6. YOUR RESPONSIBILITY. You use the Software at your own risk. Only run it on computers you own or have
+   permission to monitor. Review the code and the update source (the Git repository and its token) before you
+   trust it with an administrator account.
+
+Third-party packages (YARA, React, Vite, Mantine, Electron, FastAPI, NumPy and others) keep their own licenses.

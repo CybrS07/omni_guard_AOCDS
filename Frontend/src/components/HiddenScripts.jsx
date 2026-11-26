@@ -93,6 +93,18 @@ export default function HiddenScripts({ hidden }) {
             {/* the hidden data exactly as found */}
             <Code text={h.text} />
 
+            {/* steps to confirm a PDF script by hand with free tools */}
+            {h.howto && (
+              <Accordion variant="contained" mt="xs">
+                <Accordion.Item value="howto">
+                  <Accordion.Control>How to check this yourself</Accordion.Control>
+                  <Accordion.Panel>
+                    <pre className="hint" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{h.howto}</pre>
+                  </Accordion.Panel>
+                </Accordion.Item>
+              </Accordion>
+            )}
+
             {['pe', 'zip', 'binary', 'elf', 'pdf'].includes(h.kind) && (
               <div className="hint">Binary data is shown as hex (first bytes). It is not saved or run.</div>
             )}

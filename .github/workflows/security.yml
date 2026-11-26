@@ -1,0 +1,31 @@
+# Weekly security check of every package the app uses (React/Vite packages, Python packages, Rust crates).
+# It fails (and GitHub emails the owner) when a package with a known vulnerability is in use.
+# Dependabot (dependabot.yml) opens the pull requests that fix them.
+name: Security audit
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"   # every Monday 03:00 UTC
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: npm audit (dashboard)
+        run: npm --prefix frontend audit --audit-level=high
+      - name: npm audit (desktop)
+        run: npm --prefix desktop audit --audit-level=high --omit=dev
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo audit (agent)
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit --file backend/Cargo.lock
+      - uses: astral-sh/setup-uv@v5
+      - name: pip-audit (scan service)
+        run: |
+          uv sync --project backend/scan
+          uvx pip-audit --path backend/scan/.venv
