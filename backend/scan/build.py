@@ -88,9 +88,52 @@ def prepare_git() -> Path | None:
     return target
 
 
+def clean_path() -> None:
+    """Windows: let PyInstaller see only Python and Windows, never a copy of OpenSSL from Git, Anaconda, Perl ...
+    PyInstaller looks for the DLLs of _ssl.pyd on PATH; a wrong copy found there is packed and then fails on the
+    test PC with "DLL load failed while importing _ssl: The specified procedure could not be found"."""
+    if sys.platform != "win32":
+        return
+    import os
+    base = Path(sys.base_prefix)
+    sysroot = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    keep = [base, base / "DLLs", base / "Library" / "bin", sysroot / "System32", sysroot]
+    os.environ["PATH"] = os.pathsep.join(str(p) for p in keep if p.exists())
+
+
+def pin_openssl() -> None:
+    """Windows: make the packed OpenSSL DLLs byte-identical to the ones that belong to this Python's _ssl.pyd."""
+    if sys.platform != "win32":
+        return
+    import shutil
+    out = HERE / "dist" / "soc-scan"
+    base = Path(sys.base_prefix)
+    own = {}
+    for folder in (base, base / "DLLs", base / "Library" / "bin"):
+        for pat in ("libssl*.dll", "libcrypto*.dll"):
+            for f in folder.glob(pat):
+                own.setdefault(f.name.lower(), f)
+    if not own:
+        sys.exit("[build] this Python has no OpenSSL DLLs next to it; use the python.org / uv Python (see .python-version)")
+    for packed in list(out.rglob("libssl*.dll")) + list(out.rglob("libcrypto*.dll")):
+        src = own.get(packed.name.lower())
+        if src is None:
+            print("[build] removing foreign OpenSSL copy:", packed.relative_to(out))
+            packed.unlink()
+        elif packed.read_bytes() != src.read_bytes():
+            print("[build] replacing wrong OpenSSL copy:", packed.relative_to(out))
+            shutil.copy2(src, packed)
+    for name, src in own.items():
+        if not list(out.rglob(name)):
+            shutil.copy2(src, out / "_internal" / name if (out / "_internal").exists() else out / name)
+    print("[build] OpenSSL DLLs pinned to this Python's own:", ", ".join(sorted(own)))
+
+
 def freeze(git_folder: Path | None) -> None:
     """Step 4: pack everything with PyInstaller."""
     import PyInstaller.__main__ as pyi
+
+    clean_path()
 
     sep = ";" if sys.platform == "win32" else ":"
     args = [
@@ -132,7 +175,14 @@ def freeze(git_folder: Path | None) -> None:
     if git_folder is not None:
         args += ["--add-data", f"{git_folder}{sep}git"]
     pyi.run(args)
+    pin_openssl()
     print("scan service frozen ->", HERE / "dist" / "soc-scan")
+    exe = HERE / "dist" / "soc-scan" / ("soc-scan.exe" if sys.platform == "win32" else "soc-scan")
+    import subprocess
+    r = subprocess.run([str(exe), "--ssl-check"], capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        sys.exit("[build] the frozen scan service cannot load OpenSSL:\n" + r.stdout + r.stderr)
+    print("[build]", r.stdout.strip())
 
 
 def self_test() -> None:

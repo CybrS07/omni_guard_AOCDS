@@ -1,19 +1,19 @@
 {
   "benchmark_benign": 30,
   "benchmark_malicious": 31,
-  "benchmark_false_alarms": 0,
+  "benchmark_false_alarms": 2,
   "benchmark_missed": 2,
-  "benchmark_accuracy": 96.7,
+  "benchmark_accuracy": 93.4,
   "temperature": 1.0,
   "note": "test_accuracy uses generated samples (optimistic); benchmark_* is the honest score",
-  "trained_at": 1795703991.2307227,
+  "trained_at": 1795718907.7175593,
   "seed": 7,
   "epochs": 25,
-  "samples": 5964,
-  "real_files": 1549,
+  "samples": 5928,
+  "real_files": 1412,
   "test_accuracy": 100.0,
   "false_alarms": 0,
-  "real_test_files": 310,
-  "sha256": "adefc912bf67d23cc69a02d1d03757f3f66e1257fad2761a4a442017ecb854ff",
-  "size_kb": 282
+  "real_test_files": 283,
+  "sha256": "c99f6fc5a796dc0a8da2c8900591ace433c65dd0bd5803ad36dc12e56a0a7a85",
+  "size_kb": 293
 }

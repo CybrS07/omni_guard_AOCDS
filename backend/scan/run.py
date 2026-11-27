@@ -19,6 +19,12 @@ if sys.platform == "win32" and getattr(sys, "frozen", False):
     # only our folder and Windows itself (PowerShell is needed for the signature check)
     os.environ["PATH"] = os.pathsep.join([_here, _sys32, os.path.join(_sys32, "WindowsPowerShell", "v1.0")])
 
+if "--ssl-check" in sys.argv:   # used by the build: prove the frozen program can load OpenSSL, then stop
+    import ssl
+
+    print("ssl ok:", ssl.OPENSSL_VERSION)
+    sys.exit(0)
+
 import uvicorn  # noqa: E402
 
 from server import app  # noqa: E402

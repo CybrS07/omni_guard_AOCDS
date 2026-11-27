@@ -2,7 +2,7 @@
 name = "soc-scan"
 version = "0.1.0"
 description = "Scan + accounts service for Omni Guard AOCDS (local API on 127.0.0.1:8000)"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.14"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
